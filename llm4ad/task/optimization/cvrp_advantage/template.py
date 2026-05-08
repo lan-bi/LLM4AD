@@ -26,7 +26,7 @@ def compute_advantage(reward, load, at_the_depot, finished, loss_ema, reward_ema
                        Tracks whether training is converging or stuck.
         reward_ema:   float — exponential moving average of recent mean reward.
                        Indicates current policy quality.
-        epoch:        int   — current training epoch (0-based).  Small = early training,
+        epoch:        int   — current training epoch (1-based).  Small = early training,
                        large = late training.
 
     Returns:

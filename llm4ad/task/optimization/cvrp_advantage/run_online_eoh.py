@@ -23,9 +23,11 @@ import tempfile
 # ---------------------------------------------------------------------------
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _POMO_ROOT = os.path.abspath(os.path.join(_SCRIPT_DIR,
-                                          '../../../../../../POMO/NEW_py_ver'))
-_POMO_CVRP = os.path.join(_POMO_ROOT, 'CVRP', 'POMO')
+                                          '../../../../../POMO/NEW_py_ver'))
+_POMO_CVRP_DIR = os.path.join(_POMO_ROOT, 'CVRP')
+_POMO_CVRP = os.path.join(_POMO_CVRP_DIR, 'POMO')
 sys.path.insert(0, _POMO_ROOT)
+sys.path.insert(0, _POMO_CVRP_DIR)
 sys.path.insert(0, _POMO_CVRP)
 sys.path.insert(0, os.path.abspath(os.path.join(_SCRIPT_DIR, '../../../../')))
 

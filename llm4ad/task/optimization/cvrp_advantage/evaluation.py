@@ -13,6 +13,7 @@ import tempfile
 from typing import Any
 
 import numpy as np
+import traceback
 import torch
 
 from llm4ad.base import Evaluation
@@ -31,10 +32,12 @@ EVAL_SEED = 42             # fixed seed so candidate vs default see same data
 # Resolve POMO root once at import time so the subprocess inherits it.
 _POMO_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(__file__),
-                 '../../../../../../POMO/NEW_py_ver')
+                 '../../../../../POMO/NEW_py_ver')
 )
-_POMO_CVRP = os.path.join(_POMO_ROOT, 'CVRP', 'POMO')
+_POMO_CVRP_DIR = os.path.join(_POMO_ROOT, 'CVRP')
+_POMO_CVRP = os.path.join(_POMO_CVRP_DIR, 'POMO')
 sys.path.insert(0, _POMO_ROOT)
+sys.path.insert(0, _POMO_CVRP_DIR)
 sys.path.insert(0, _POMO_CVRP)
 
 
@@ -98,7 +101,8 @@ class CVRPAdvantageEvaluation(Evaluation):
 
         from CVRPTrainer import CVRPTrainer as Trainer
 
-        checkpoint = torch.load(self._checkpoint_path, map_location='cuda:0',
+        device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
+        checkpoint = torch.load(self._checkpoint_path, map_location=device,
                                 weights_only=False)
 
         # ── Candidate ──────────────────────────────────────────────
@@ -139,12 +143,13 @@ class CVRPAdvantageEvaluation(Evaluation):
 
             batch_scores = []
             for _ in range(N_EVAL_BATCHES):
-                score, _ = trainer._train_one_batch(EVAL_BATCH_SIZE, epoch=0)
+                score, _ = trainer._train_one_batch(EVAL_BATCH_SIZE, epoch=1)
                 batch_scores.append(score)
 
             # Use the last 3 batches for stability
             return float(np.mean(batch_scores[-3:]))
         except Exception:
+            traceback.print_exc()
             return None
         finally:
             import shutil
