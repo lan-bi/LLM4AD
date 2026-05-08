@@ -88,6 +88,21 @@ from llm4ad.base import TextFunctionProgramConverter
 #  Helpers
 # ---------------------------------------------------------------------------
 
+class _KeyMaskedLLM:
+    """Wrap an LLM to mask ``_key`` from profiler ``__dict__`` inspection."""
+
+    def __init__(self, llm):
+        self._wrapped = llm
+
+    def __getattr__(self, name):
+        if name == '__dict__':
+            d = self._wrapped.__dict__.copy()
+            if '_key' in d:
+                d['_key'] = '***'
+            return d
+        return getattr(self._wrapped, name)
+
+
 def _compile_function(best_function, template: str):
     """Compile a Function object into a callable using the template imports."""
     from llm4ad.base import Function as FuncType
@@ -162,8 +177,9 @@ def _run_eoh_and_switch(llm, evaluation, controller,
                            f'eoh_epoch{epoch}')
     profiler = EoHProfiler(log_dir=log_dir, log_style='simple')
 
+    # Wrap LLM so profiler log never sees the raw API key
     eoh = EoH(
-        llm=llm,
+        llm=_KeyMaskedLLM(llm),
         evaluation=evaluation,
         profiler=profiler,
         max_sample_nums=decision.sample_count,
