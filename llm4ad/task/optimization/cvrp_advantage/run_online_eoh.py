@@ -48,7 +48,7 @@ LLM_CONFIG = {
 TRAIN_CONFIG = {
     'problem_size': 20,          # proxy: CVRP20; set to 100 for production
     'pomo_size': 20,             # = problem_size for POMO
-    'epochs': 200,               # total training epochs
+    'epochs': 1000,              # total training epochs
     'train_episodes': 2000,      # episodes per epoch
     'train_batch_size': 64,
     'use_cuda': True,
