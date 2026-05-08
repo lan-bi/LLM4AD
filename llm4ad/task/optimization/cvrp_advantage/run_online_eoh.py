@@ -37,9 +37,9 @@ sys.path.insert(0, os.path.abspath(os.path.join(_SCRIPT_DIR, '../../../../')))
 
 # LLM credentials (same format as LLM4AD examples)
 LLM_CONFIG = {
-    'host': 'api.deepseek.com',
-    'key': 'sk-your-key-here',
-    'model': 'deepseek-chat',
+    'host': os.environ.get('LLM4AD_HOST', 'api.deepseek.com'),
+    'key': os.environ['LLM4AD_KEY'],
+    'model': os.environ.get('LLM4AD_MODEL', 'deepseek-chat'),
     'timeout': 60,
 }
 
