@@ -25,6 +25,7 @@ __all__ = ['CVRPAdvantageEvaluation']
 # ---------------------------------------------------------------------------
 N_EVAL_BATCHES = 10        # number of training batches for quick comparison
 EVAL_BATCH_SIZE = 64       # batch size for evaluation
+EVAL_SEED = 42             # fixed seed so candidate vs default see same data
 # ---------------------------------------------------------------------------
 
 # Resolve POMO root once at import time so the subprocess inherits it.
@@ -101,12 +102,14 @@ class CVRPAdvantageEvaluation(Evaluation):
                                 weights_only=False)
 
         # ── Candidate ──────────────────────────────────────────────
+        torch.manual_seed(EVAL_SEED)
         score_cand = self._train_n_batches(
             checkpoint, callable_func)
         if score_cand is None:
             return None
 
         # ── Default ────────────────────────────────────────────────
+        torch.manual_seed(EVAL_SEED)
         score_def = self._train_n_batches(
             checkpoint, Trainer._default_advantage)
         if score_def is None:
