@@ -8,7 +8,10 @@
 from __future__ import annotations
 
 import dataclasses
+import logging
+import os
 import re
+from datetime import datetime
 from typing import Optional
 
 # ---------------------------------------------------------------------------
@@ -83,9 +86,36 @@ class SearchController:
         direction_hint="",
     )
 
-    def __init__(self, llm):
+    def __init__(self, llm, log_dir: str = None):
         self._llm = llm
         self.history: list[SearchRecord] = []
+
+        # --- logging ---
+        self._log_dir = log_dir
+        self._logger = None
+        if log_dir is not None:
+            os.makedirs(log_dir, exist_ok=True)
+            self._logger = logging.getLogger(
+                f'SearchController_{id(self)}')
+            self._logger.setLevel(logging.DEBUG)
+            # file handler – one log file per training run
+            log_path = os.path.join(
+                log_dir,
+                f'controller_{datetime.now():%Y%m%d_%H%M%S}.log')
+            fh = logging.FileHandler(log_path, mode='a')
+            fh.setLevel(logging.DEBUG)
+            fh.setFormatter(logging.Formatter(
+                '[%(asctime)s] %(message)s',
+                datefmt='%Y-%m-%d %H:%M:%S'))
+            self._logger.addHandler(fh)
+            # also print to console
+            ch = logging.StreamHandler()
+            ch.setLevel(logging.INFO)
+            ch.setFormatter(logging.Formatter(
+                '[Controller] %(message)s'))
+            self._logger.addHandler(ch)
+            self._logger.info('SearchController initialized, '
+                              'log file: %s', log_path)
 
     # ------------------------------------------------------------------
     #  Core API
@@ -106,14 +136,56 @@ class SearchController:
             prompt = self._build_meta_prompt(
                 epoch, recent_scores, recent_losses,
                 plateau_epochs, total_epochs)
+
+            if self._logger:
+                self._logger.info(
+                    'DECIDE epoch=%d plateau=%d '
+                    'score_recent=%.4f→%.4f '
+                    'history_size=%d',
+                    epoch, plateau_epochs,
+                    recent_scores[0], recent_scores[-1],
+                    len(self.history))
+                self._logger.debug('--- DECIDE PROMPT ---\n%s\n'
+                                   '--- END PROMPT ---', prompt)
+
             response = self._llm.draw_sample(prompt)
-            return self._parse_decision(response)
-        except Exception:
+
+            if self._logger:
+                self._logger.debug('--- LLM RESPONSE ---\n%s\n'
+                                   '--- END RESPONSE ---', response)
+
+            decision = self._parse_decision(response)
+
+            if self._logger:
+                self._logger.info(
+                    'DECISION intensity=%s samples=%d '
+                    'ops=%s pop=%d hint=%r',
+                    decision.search_intensity,
+                    decision.sample_count,
+                    ','.join(decision.operators),
+                    decision.pop_size,
+                    decision.direction_hint)
+
+            return decision
+        except Exception as exc:
+            if self._logger:
+                self._logger.warning(
+                    'DECIDE failed (fallback): %s', exc)
             return SearchController._FALLBACK
 
     def record(self, entry: SearchRecord) -> None:
         """Append a completed search to the history library."""
         self.history.append(entry)
+        if self._logger:
+            self._logger.info(
+                'RECORD epoch=%d intensity=%s samples=%d '
+                'delta=%+.4f effective=%s history=%d',
+                entry.trigger_epoch,
+                entry.search_intensity,
+                entry.sample_count,
+                entry.best_delta,
+                entry.effective,
+                len(self.history))
 
     # ------------------------------------------------------------------
     #  Prompt construction
