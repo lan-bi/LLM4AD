@@ -59,7 +59,7 @@ class CVRPAdvantageEvaluation(Evaluation):
             use_numba_accelerate=False,
             timeout_seconds=timeout_seconds,
             safe_evaluate=True,
-            fork_proc='auto',
+            fork_proc=False,  # spawn: avoids CUDA+fork issues in subprocess
         )
 
         # Context set by the trainer before an EoH round.
