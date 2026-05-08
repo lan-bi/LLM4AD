@@ -177,9 +177,10 @@ class CVRPAdvantageEvaluation(Evaluation):
             'optimizer': {'lr': 1e-4, 'weight_decay': 1e-6},
             'scheduler': {'milestones': [8001, 8051], 'gamma': 0.1},
         }
+        _use_cuda = torch.cuda.is_available()
         trainer_params = {
-            'use_cuda': True,
-            'cuda_device_num': 0,
+            'use_cuda': _use_cuda,
+            'cuda_device_num': 0 if _use_cuda else None,
             'epochs': 0,
             'train_episodes': N_EVAL_BATCHES * EVAL_BATCH_SIZE,
             'train_batch_size': EVAL_BATCH_SIZE,
