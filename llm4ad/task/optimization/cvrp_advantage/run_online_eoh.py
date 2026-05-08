@@ -14,6 +14,7 @@ Before running, edit the LLM credentials and problem configuration below.
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import tempfile
@@ -193,13 +194,14 @@ def _run_eoh_and_switch(llm, evaluation, controller,
             best_delta=float(best_score) if best_score else 0.0,
             effective=False,
         ))
-        return
+        return False, None
 
     callable_fn = _compile_function(best_fn, template_program)
     if callable_fn is None:
-        return
+        return False, None
 
     trainer.switch_advantage(callable_fn)
+    fn_source = str(best_fn)  # serialise for resume
 
     controller.record(SearchRecord(
         trigger_epoch=epoch,
@@ -213,6 +215,62 @@ def _run_eoh_and_switch(llm, evaluation, controller,
         best_delta=float(best_score),
         effective=True,
     ))
+    return True, fn_source
+
+
+# ---------------------------------------------------------------------------
+#  Full-state persistence (for resume)
+# ---------------------------------------------------------------------------
+
+_FULL_STATE_FILE = 'full_state.json'
+
+
+def _save_full_state(state_dir: str,
+                     controller: SearchController,
+                     advantage_fn_source: str | None,
+                     last_search_epoch: int,
+                     start_epoch: int) -> None:
+    """Persist all EoH state to a JSON file for later resume."""
+    data = {
+        'controller_history': [r.to_dict() for r in controller.history],
+        'advantage_fn_source': advantage_fn_source,
+        'last_search_epoch': last_search_epoch,
+        'start_epoch': start_epoch,
+    }
+    path = os.path.join(state_dir, _FULL_STATE_FILE)
+    with open(path, 'w') as f:
+        json.dump(data, f, indent=2)
+
+
+def _load_full_state(state_dir: str) -> dict | None:
+    """Load persisted EoH state.  Returns None if no state file exists."""
+    path = os.path.join(state_dir, _FULL_STATE_FILE)
+    if not os.path.exists(path):
+        return None
+    with open(path, 'r') as f:
+        return json.load(f)
+
+
+def _compile_from_source(source: str | None, template: str):
+    """Compile a serialised advantage function back into a callable.
+
+    ``source`` should be the full function definition (including ``def``
+    line).  If ``None``, return ``None`` (meaning use default).
+    """
+    if source is None:
+        return None
+    from llm4ad.base import TextFunctionProgramConverter
+    func = TextFunctionProgramConverter.text_to_function(source)
+    if func is None:
+        return None
+    program = TextFunctionProgramConverter.function_to_program(func, template)
+    if program is None:
+        return None
+    try:
+        callables = program.exec()
+        return callables[0]
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -231,12 +289,49 @@ def main():
     evaluation = CVRPAdvantageEvaluation(
         timeout_seconds=ONLINE_CONFIG['eval_timeout_seconds'])
 
-    trainer.logger.info('=== Online EoH-integrated training started ===')
+    # --- resume from checkpoint if available ---
+    full_state = _load_full_state(ONLINE_CONFIG['log_dir'])
+    last_search_epoch = 0
+    current_adv_source: str | None = None  # None = use default
+
+    if full_state is not None:
+        # Restore EoH controller history
+        for rec_dict in full_state.get('controller_history', []):
+            controller.history.append(SearchRecord.from_dict(rec_dict))
+
+        # Restore advantage function
+        current_adv_source = full_state.get('advantage_fn_source')
+        if current_adv_source is not None:
+            compiled = _compile_from_source(
+                current_adv_source, template_program)
+            if compiled is not None:
+                trainer.switch_advantage(compiled)
+
+        last_search_epoch = full_state.get('last_search_epoch', 0)
+        start_epoch = full_state.get('start_epoch', 1)
+        trainer.start_epoch = start_epoch
+
+        # Restore EoH state from the last model checkpoint
+        resume_ckpt = os.path.join(ONLINE_CONFIG['log_dir'],
+                                   'resume_checkpoint.pt')
+        if os.path.exists(resume_ckpt):
+            ckpt = torch.load(resume_ckpt, map_location='cpu',
+                              weights_only=False)
+            trainer.model.load_state_dict(ckpt['model_state_dict'])
+            trainer.optimizer.load_state_dict(ckpt['optimizer_state_dict'])
+            trainer.scheduler.load_state_dict(ckpt['scheduler_state_dict'])
+            trainer.restore_eoh_state(ckpt)
+
+        trainer.logger.info(
+            '=== Resumed from checkpoint (epoch %d, %d controller records) ===',
+            start_epoch, len(controller.history))
+    else:
+        trainer.logger.info('=== Online EoH-integrated training started ===')
+
     trainer.logger.info('Problem: CVRP%d, Epochs: %d',
                         TRAIN_CONFIG['problem_size'],
                         TRAIN_CONFIG['epochs'])
 
-    last_search_epoch = 0
     trainer.time_estimator.reset(trainer.start_epoch)
 
     for epoch in range(trainer.start_epoch, TRAIN_CONFIG['epochs'] + 1):
@@ -293,10 +388,23 @@ def main():
             )
 
             # Run EoH and switch if effective
-            _run_eoh_and_switch(
+            switched, fn_source = _run_eoh_and_switch(
                 llm, evaluation, controller, trainer, epoch, decision)
 
+            if switched:
+                current_adv_source = fn_source
+
             last_search_epoch = epoch
+
+            # Persist full state for resume
+            trainer.save_temp_checkpoint(
+                os.path.join(ONLINE_CONFIG['log_dir'],
+                             'resume_checkpoint.pt'))
+            _save_full_state(
+                ONLINE_CONFIG['log_dir'],
+                controller, current_adv_source,
+                last_search_epoch, epoch + 1)
+
             os.remove(ckpt_path)
 
         # Logging
