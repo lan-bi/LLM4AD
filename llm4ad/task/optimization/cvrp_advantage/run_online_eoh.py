@@ -94,10 +94,12 @@ from llm4ad.base import TextFunctionProgramConverter
 # ---------------------------------------------------------------------------
 
 class _KeyMaskedLLM:
-    """Wrap an LLM to mask ``_key`` from profiler ``__dict__`` inspection."""
+    """Wrap LLM: mask key + inject recent eval errors into prompts."""
 
-    def __init__(self, llm):
+    def __init__(self, llm, error_log_path: str | None = None):
         self._wrapped = llm
+        self._error_log_path = error_log_path
+        self._error_pos = 0  # track last read position in error log
 
     def __getattr__(self, name):
         if name == '__dict__':
@@ -105,7 +107,26 @@ class _KeyMaskedLLM:
             if '_key' in d:
                 d['_key'] = '***'
             return d
+        if name == 'draw_sample':
+            return self._draw_sample
         return getattr(self._wrapped, name)
+
+    def _draw_sample(self, prompt):
+        if self._error_log_path and os.path.exists(self._error_log_path):
+            try:
+                with open(self._error_log_path) as f:
+                    f.seek(self._error_pos)
+                    new_errs = f.read().strip()
+                    self._error_pos = f.tell()
+                if new_errs:
+                    # prepend short summary of latest errors
+                    lines = new_errs.splitlines()
+                    last_err = '\n'.join(lines[-3:])  # last error type+msg
+                    prompt = (f"[Latest eval error, avoid this pattern: "
+                              f"{last_err}]\n\n" + prompt)
+            except Exception:
+                pass
+        return self._wrapped.draw_sample(prompt)
 
 
 def _compile_function(best_function, template: str):
@@ -176,15 +197,16 @@ def _build_trainer():
 
 
 def _run_eoh_and_switch(llm, evaluation, controller,
-                        trainer, epoch: int, decision: SearchDecision):
+                        trainer, epoch: int, decision: SearchDecision,
+                        error_log_path: str | None = None):
     """Run one EoH round, compile the best function, and switch if effective."""
     log_dir = os.path.join(ONLINE_CONFIG['log_dir'],
                            f'eoh_epoch{epoch}')
     profiler = EoHProfiler(log_dir=log_dir, log_style='simple')
 
-    # Wrap LLM so profiler log never sees the raw API key
+    # Wrap LLM: mask key + inject latest eval errors into each prompt
     eoh = EoH(
-        llm=_KeyMaskedLLM(llm),
+        llm=_KeyMaskedLLM(llm, error_log_path=error_log_path),
         evaluation=evaluation,
         profiler=profiler,
         max_sample_nums=decision.sample_count,
@@ -801,7 +823,8 @@ def main():
 
                 # Run EoH and switch if effective
                 switched, fn_source = _run_eoh_and_switch(
-                    llm, evaluation, controller, trainer, epoch, decision)
+                    llm, evaluation, controller, trainer, epoch, decision,
+                    error_log_path=error_log_path)
 
                 if switched:
                     current_adv_source = fn_source
