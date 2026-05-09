@@ -585,7 +585,8 @@ def main():
         # Update history + plateau tracking
         trainer.score_history.append(train_score)
         trainer.loss_history.append(train_loss)
-        if train_score > trainer.best_score:
+        # score = route distance (lower is better)
+        if train_score < trainer.best_score:
             trainer.best_score = train_score
             trainer.plateau_counter = 0
         else:
