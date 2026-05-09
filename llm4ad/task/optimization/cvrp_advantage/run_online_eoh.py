@@ -935,6 +935,7 @@ def main():
                     new_design = _call_design_review_agent(
                         llm, best_fns, worst_fns, old_design)
                     if new_design != old_design:
+                        new_design = _summarize_reflections(llm, new_design)
                         _save_design_lessons(ONLINE_CONFIG['log_dir'], new_design)
                         old_design = new_design
 
