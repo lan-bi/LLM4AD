@@ -59,8 +59,9 @@ TRAIN_CONFIG = {
 
 # Online EoH configuration
 ONLINE_CONFIG = {
-    'plateau_min_epochs': 30,    # trigger search after this many non-improving epochs
-    'force_search_every': 100,   # force a search at least every N epochs
+    'plateau_min_epochs': 25,    # trigger search after this many non-improving epochs
+    'force_search_every': 80,    # periodic trigger — no longer requires prior search
+    'first_search_epoch': 80,    # absolute deadline: force first EoH at this epoch
     'log_dir': './logs/online_eoh',
     'eval_timeout_seconds': 120,
     'design_review_interval': 3,  # run design review every N EoH searches
@@ -158,7 +159,7 @@ def _build_trainer():
             'img_save_interval': 250,
             'log_image_params_1': {
                 'json_foldername': 'log_image_style',
-                'filename': 'style_cvrp_100.json',
+                'filename': 'style_cvrp_20.json',   # CVRP100 share same plot style
             },
             'log_image_params_2': {
                 'json_foldername': 'log_image_style',
@@ -675,11 +676,18 @@ def main():
         plateau_trigger = trainer.detect_plateau(
             ONLINE_CONFIG['plateau_min_epochs'])
         periodic_trigger = (
-            epochs_since_search >= ONLINE_CONFIG['force_search_every']
-            and last_search_epoch > 0)
+            epochs_since_search >= ONLINE_CONFIG['force_search_every'])
+        first_trigger = (
+            last_search_epoch == 0
+            and epoch == ONLINE_CONFIG['first_search_epoch'])
 
-        if plateau_trigger or periodic_trigger:
-            trigger_reason = 'plateau' if plateau_trigger else 'periodic'
+        if plateau_trigger or periodic_trigger or first_trigger:
+            if first_trigger:
+                trigger_reason = 'first'
+            elif plateau_trigger:
+                trigger_reason = 'plateau'
+            else:
+                trigger_reason = 'periodic'
             trainer.logger.info(
                 'Triggering EoH search (reason=%s, epoch=%d, plateau=%d epochs)',
                 trigger_reason, epoch, trainer.plateau_counter)
