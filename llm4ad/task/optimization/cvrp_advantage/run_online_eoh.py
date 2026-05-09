@@ -539,6 +539,63 @@ def _augment_task_description_full(base: str, error_lessons: str,
 
 
 # ---------------------------------------------------------------------------
+#  Template update – replaces default body with latest best function
+# ---------------------------------------------------------------------------
+
+def _extract_fn_body(fn_source: str) -> str:
+    """Return the function body (code after docstring) from *fn_source*."""
+    lines = fn_source.splitlines()
+    result = []
+    in_docstring = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith('"""') or stripped.startswith("'''"):
+            if not in_docstring:
+                in_docstring = True
+            else:
+                in_docstring = False
+                continue  # skip closing triple-quote line
+        if in_docstring:
+            continue
+        if stripped == '' and not result:
+            continue  # skip blank lines before body
+        result.append(line)
+    return '\n'.join(result).strip()
+
+
+def _build_updated_template(fn_source: str,
+                            design_insights: str) -> str:
+    """Replace default function body with best function, add design notes."""
+    body = _extract_fn_body(fn_source)
+    header = (
+        "import torch\n\n"
+        "def compute_advantage(reward, load, at_the_depot, finished, "
+        "loss_ema, reward_ema, epoch):\n"
+        '    """\n'
+        "    Compute advantage for REINFORCE training of CVRP.\n\n"
+        "    Args:\n"
+        "        reward:       (batch, pomo) float — negative route distance\n"
+        "        load:         (batch, pomo) float — remaining capacity [0,1]\n"
+        "        at_the_depot: (batch, pomo) bool  — last step at depot\n"
+        "        finished:     (batch, pomo) bool  — all customers visited\n"
+        "        loss_ema:     float — EMA of recent loss\n"
+        "        reward_ema:   float — EMA of recent reward\n"
+        "        epoch:        int   — current training epoch\n\n"
+        "    Returns:\n"
+        "        advantage:    (batch, pomo) float tensor\n"
+        '    """\n'
+    )
+    parts = [header]
+    if design_insights:
+        parts.append("    # ── design insights from review agent ──")
+        for line in design_insights.strip().splitlines():
+            parts.append(f"    # {line.strip()}")
+        parts.append("")
+    parts.append(body)
+    return '\n'.join(parts)
+
+
+# ---------------------------------------------------------------------------
 #  Full-state persistence (for resume)
 # ---------------------------------------------------------------------------
 
@@ -708,6 +765,10 @@ def main():
         if instant or design_lessons:
             evaluation._task_description = _augment_task_description_full(
                 task_description, instant, design_lessons)
+        # Restore updated template (if advantage was saved)
+        if current_adv_source:
+            evaluation._template_program = _build_updated_template(
+                current_adv_source, design_lessons)
     else:
         trainer.logger.info('=== Online EoH-integrated training started ===')
 
@@ -874,6 +935,12 @@ def main():
 
                 evaluation._task_description = _augment_task_description_full(
                     task_description, instant, old_design)
+
+                # Update template program with best function + design insights
+                if switched and current_adv_source:
+                    new_tmpl = _build_updated_template(
+                        current_adv_source, old_design)
+                    evaluation._template_program = new_tmpl
 
                 # Reset plateau so EoH doesn't retrigger every epoch
                 trainer.plateau_counter = 0
