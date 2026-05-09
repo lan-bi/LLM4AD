@@ -146,6 +146,9 @@ class CVRPAdvantageEvaluation(Evaluation):
             trainer = self._build_eval_trainer()
             trainer.model.load_state_dict(checkpoint['model_state_dict'])
             trainer.advantage_fn = advantage_fn
+            # Restore EMAs so evaluation sees realistic training state
+            trainer.loss_ema = checkpoint.get('loss_ema')
+            trainer.reward_ema = checkpoint.get('reward_ema')
 
             batch_scores = []
             for _ in range(N_EVAL_BATCHES):

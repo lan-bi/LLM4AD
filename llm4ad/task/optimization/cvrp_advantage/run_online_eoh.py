@@ -124,6 +124,9 @@ class _KeyMaskedLLM:
                     last_err = '\n'.join(lines[-3:])  # last error type+msg
                     prompt = (f"[Latest eval error, avoid this pattern: "
                               f"{last_err}]\n\n" + prompt)
+                    import logging
+                    logging.getLogger('trainer').debug(
+                        '[ErrorAwareLLM] injected recent error into prompt')
             except Exception:
                 pass
         return self._wrapped.draw_sample(prompt)
