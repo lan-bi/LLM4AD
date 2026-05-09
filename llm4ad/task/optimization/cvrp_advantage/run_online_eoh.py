@@ -182,7 +182,7 @@ def _build_trainer():
             'img_save_interval': 250,
             'log_image_params_1': {
                 'json_foldername': 'log_image_style',
-                'filename': 'style_cvrp_20.json',   # CVRP100 share same plot style
+                'filename': 'style_cvrp_100.json',
             },
             'log_image_params_2': {
                 'json_foldername': 'log_image_style',
