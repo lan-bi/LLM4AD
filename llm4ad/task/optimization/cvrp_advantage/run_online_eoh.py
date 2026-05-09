@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import signal
 import sys
 import tempfile
 
@@ -72,7 +73,8 @@ import torch
 from torch.utils.tensorboard import SummaryWriter
 
 from CVRPTrainer import CVRPTrainer as Trainer
-from utils.utils import create_logger, set_result_folder
+from utils.utils import (create_logger, set_result_folder,
+                          util_save_log_image_with_label)
 
 from llm4ad.task.optimization.cvrp_advantage import (
     CVRPAdvantageEvaluation,
@@ -152,8 +154,8 @@ def _build_trainer():
         'train_episodes': TRAIN_CONFIG['train_episodes'],
         'train_batch_size': TRAIN_CONFIG['train_batch_size'],
         'logging': {
-            'model_save_interval': 999999,
-            'img_save_interval': 999999,
+            'model_save_interval': 250,
+            'img_save_interval': 250,
             'log_image_params_1': {
                 'json_foldername': 'log_image_style',
                 'filename': 'style_cvrp_100.json',
@@ -500,6 +502,52 @@ def _compile_from_source(source: str | None, template: str):
 
 
 # ---------------------------------------------------------------------------
+#  Periodic checkpoint
+# ---------------------------------------------------------------------------
+
+_SAVE_INTERVAL = 250
+
+
+def _save_pomo_checkpoint(trainer, epoch: int, *, final: bool = False):
+    """Save model weights + loss/score curves to POMO result folder."""
+    log_params_1 = trainer.trainer_params['logging']['log_image_params_1']
+    log_params_2 = trainer.trainer_params['logging']['log_image_params_2']
+    result_folder = trainer.result_folder
+
+    # curves
+    if epoch > 1:
+        trainer.logger.info("Saving log_image")
+        prefix = f'{result_folder}/latest'
+        util_save_log_image_with_label(
+            prefix, log_params_1, trainer.result_log, labels=['train_score'])
+        util_save_log_image_with_label(
+            prefix, log_params_2, trainer.result_log, labels=['train_loss'])
+
+    # model checkpoint
+    label = 'final' if final else f'epoch{epoch}'
+    trainer.logger.info(f"Saving checkpoint ({label})")
+    checkpoint_dict = {
+        'epoch': epoch,
+        'model_state_dict': trainer.model.state_dict(),
+        'optimizer_state_dict': trainer.optimizer.state_dict(),
+        'scheduler_state_dict': trainer.scheduler.state_dict(),
+        'result_log': trainer.result_log.get_raw_data(),
+        'score_history': trainer.score_history,
+        'loss_history': trainer.loss_history,
+        'plateau_counter': trainer.plateau_counter,
+        'best_score': trainer.best_score,
+    }
+    torch.save(checkpoint_dict,
+               f'{result_folder}/checkpoint-{label}.pt')
+    if not final:
+        img_prefix = f'{result_folder}/img/checkpoint-{epoch}'
+        util_save_log_image_with_label(
+            img_prefix, log_params_1, trainer.result_log, labels=['train_score'])
+        util_save_log_image_with_label(
+            img_prefix, log_params_2, trainer.result_log, labels=['train_loss'])
+
+
+# ---------------------------------------------------------------------------
 #  Main
 # ---------------------------------------------------------------------------
 
@@ -569,9 +617,33 @@ def main():
                         TRAIN_CONFIG['problem_size'],
                         TRAIN_CONFIG['epochs'])
 
+    # --- signal handler: save on Ctrl+C / kill ---
+    _state = {'trainer': trainer, 'epoch': 0, 'writer': writer,
+              'controller': controller, 'current_adv_source': current_adv_source,
+              'last_search_epoch': last_search_epoch}
+
+    def _on_exit(signum=None, frame=None):
+        e = _state['epoch']
+        if e > 0:
+            trainer.logger.info('Interrupted — saving checkpoint at epoch %d', e)
+            _save_pomo_checkpoint(trainer, e, final=True)
+            trainer.save_temp_checkpoint(
+                os.path.join(ONLINE_CONFIG['log_dir'], 'resume_checkpoint.pt'))
+            _save_full_state(ONLINE_CONFIG['log_dir'],
+                             _state['controller'],
+                             _state['current_adv_source'],
+                             _state['last_search_epoch'],
+                             e + 1)
+        _state['writer'].close()
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, _on_exit)
+    signal.signal(signal.SIGTERM, _on_exit)
+
     trainer.time_estimator.reset(trainer.start_epoch)
 
     for epoch in range(trainer.start_epoch, TRAIN_CONFIG['epochs'] + 1):
+        _state['epoch'] = epoch
         trainer.logger.info('=' * 65)
 
         # LR decay
@@ -631,6 +703,7 @@ def main():
 
             if switched:
                 current_adv_source = fn_source
+                _state['current_adv_source'] = current_adv_source
 
             # --- TensorBoard EoH events ---
             writer.add_scalar('EoH/TriggerEpoch', epoch, len(controller.history))
@@ -670,6 +743,7 @@ def main():
                 task_description, new_err, old_design)
 
             last_search_epoch = epoch
+            _state['last_search_epoch'] = last_search_epoch
 
             # Persist full state for resume
             trainer.save_temp_checkpoint(
@@ -688,6 +762,10 @@ def main():
         writer.add_scalar('Train/Plateau', trainer.plateau_counter, epoch)
         writer.add_scalar('Train/BestScore', trainer.best_score, epoch)
 
+        # --- periodic checkpoint ---
+        if epoch % _SAVE_INTERVAL == 0:
+            _save_pomo_checkpoint(trainer, epoch)
+
         # Logging
         elapsed, remain = trainer.time_estimator.get_est_string(
             epoch, TRAIN_CONFIG['epochs'])
@@ -699,6 +777,8 @@ def main():
             trainer.plateau_counter, trainer.best_score,
             elapsed, remain)
 
+    # --- final save ---
+    _save_pomo_checkpoint(trainer, TRAIN_CONFIG['epochs'], final=True)
     writer.close()
     trainer.logger.info('=== Training complete ===')
     trainer.logger.info('Total EoH searches: %d', len(controller.history))
