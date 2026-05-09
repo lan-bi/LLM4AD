@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import tempfile
 
@@ -235,6 +236,109 @@ def _run_eoh_and_switch(llm, evaluation, controller,
 
 
 # ---------------------------------------------------------------------------
+#  Reflection agent – learns from evaluation failures
+# ---------------------------------------------------------------------------
+
+_REFLECTION_FILE = 'reflections.json'
+_MAX_ERRORS_PER_REFLECTION = 12
+
+
+def _collect_eoh_errors(eoh_log_dir: str) -> dict:
+    """Scan EoH profiler logs for failure stats + traceback excerpts."""
+    info = {'total': 0, 'valid': 0, 'errors': []}
+    for entry in sorted(os.listdir(eoh_log_dir)):
+        inner = os.path.join(eoh_log_dir, entry)
+        if not os.path.isdir(inner):
+            continue
+        samples_dir = os.path.join(inner, 'samples')
+        if not os.path.isdir(samples_dir):
+            continue
+        for fname in sorted(os.listdir(samples_dir)):
+            if not (fname.startswith('samples_') and fname.endswith('.json')):
+                continue
+            with open(os.path.join(samples_dir, fname)) as f:
+                data = json.load(f)
+            for sample in data:
+                info['total'] += 1
+                if sample.get('score') is not None:
+                    info['valid'] += 1
+    for entry in sorted(os.listdir(eoh_log_dir)):
+        inner = os.path.join(eoh_log_dir, entry)
+        if not os.path.isdir(inner):
+            continue
+        log_path = os.path.join(inner, 'run_log.txt')
+        if not os.path.exists(log_path):
+            continue
+        with open(log_path, errors='replace') as f:
+            text = f.read()
+        tb_blocks = re.findall(
+            r'(Traceback \(most recent call last\):.*?)(?=\n\n|\nSample|\Z)',
+            text, re.DOTALL)
+        for block in tb_blocks:
+            lines = block.strip().splitlines()
+            short = '\n'.join(lines[-4:]) if len(lines) > 4 else block
+            info['errors'].append(short)
+    info['errors'] = info['errors'][:_MAX_ERRORS_PER_REFLECTION]
+    info['failed'] = info['total'] - info['valid']
+    return info
+
+
+def _call_reflection_agent(llm, error_info: dict, prev_lessons: str) -> str:
+    """Ask LLM to analyse errors → return bullet-point design lessons."""
+    if error_info['total'] == 0 or error_info['failed'] == 0:
+        return prev_lessons or ''
+    parts = [
+        "Analyse runtime errors from a CVRP advantage-function search.",
+        f"Latest round: {error_info['total']} samples, "
+        f"{error_info['valid']} valid, {error_info['failed']} failed.",
+    ]
+    if error_info['errors']:
+        parts.append("Sample tracebacks (last lines):")
+        for i, err in enumerate(error_info['errors'][:8], 1):
+            parts.append(f"  #{i}: {err}")
+    if prev_lessons:
+        parts.append(f"\nPrevious lessons:\n{prev_lessons}")
+    parts += [
+        "",
+        "Identify NEW mistake patterns. Output 2-5 concise bullets (each '- ').",
+        "If no new patterns, output exactly 'NO_NEW_LESSONS'.",
+    ]
+    prompt = '\n'.join(parts)
+    try:
+        response = llm.draw_sample(prompt)
+    except Exception:
+        response = 'NO_NEW_LESSONS'
+    if 'NO_NEW_LESSONS' in response:
+        return prev_lessons or ''
+    if prev_lessons:
+        return prev_lessons.strip() + '\n' + response.strip()
+    return response.strip()
+
+
+def _load_reflections(state_dir: str) -> str:
+    path = os.path.join(state_dir, _REFLECTION_FILE)
+    if not os.path.exists(path):
+        return ''
+    with open(path) as f:
+        return json.load(f).get('lessons', '')
+
+
+def _save_reflections(state_dir: str, lessons: str) -> None:
+    with open(os.path.join(state_dir, _REFLECTION_FILE), 'w') as f:
+        json.dump({'lessons': lessons}, f, indent=2)
+
+
+def _augment_task_description(base: str, reflections: str) -> str:
+    """Append accumulated design lessons to the task description."""
+    if not reflections:
+        return base
+    return (base
+            + '\n\n## Lessons Learned from Previous Attempts\n'
+            + 'The following patterns caused runtime errors.  Avoid them:\n\n'
+            + reflections)
+
+
+# ---------------------------------------------------------------------------
 #  Full-state persistence (for resume)
 # ---------------------------------------------------------------------------
 
@@ -409,6 +513,17 @@ def main():
 
             if switched:
                 current_adv_source = fn_source
+
+            # --- reflection: learn from evaluation failures ---
+            eoh_log = os.path.join(ONLINE_CONFIG['log_dir'],
+                                   f'eoh_epoch{epoch}')
+            err_info = _collect_eoh_errors(eoh_log)
+            old_lessons = _load_reflections(ONLINE_CONFIG['log_dir'])
+            new_lessons = _call_reflection_agent(llm, err_info, old_lessons)
+            if new_lessons != old_lessons:
+                _save_reflections(ONLINE_CONFIG['log_dir'], new_lessons)
+            evaluation._task_description = _augment_task_description(
+                task_description, new_lessons)
 
             last_search_epoch = epoch
 
