@@ -346,8 +346,11 @@ def _load_instant_lessons(state_dir: str) -> str:
     path = os.path.join(state_dir, _INSTANT_FILE)
     if not os.path.exists(path):
         return ''
-    with open(path) as f:
-        return '\n'.join(json.load(f).get('errors', []))
+    try:
+        with open(path) as f:
+            return '\n'.join(json.load(f).get('errors', []))
+    except (json.JSONDecodeError, OSError):
+        return ''
 
 
 # --- long-term reflections (accumulated + summarized) → should_search / DesignReview ---
@@ -356,16 +359,22 @@ def _load_long_reflections(state_dir: str) -> str:
     path = os.path.join(state_dir, _REFLECTION_FILE)
     if not os.path.exists(path):
         return ''
-    with open(path) as f:
-        return json.load(f).get('lessons', '')
+    try:
+        with open(path) as f:
+            return json.load(f).get('lessons', '')
+    except (json.JSONDecodeError, OSError):
+        return ''
 
 
 def _save_long_reflections(state_dir: str, lessons: str) -> None:
     path = os.path.join(state_dir, _REFLECTION_FILE)
     old = {}
     if os.path.exists(path):
-        with open(path) as f:
-            old = json.load(f)
+        try:
+            with open(path) as f:
+                old = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            old = {}
     old['lessons'] = lessons
     with open(path, 'w') as f:
         json.dump(old, f, indent=2)
@@ -473,16 +482,22 @@ def _load_design_lessons(state_dir: str) -> str:
     path = os.path.join(state_dir, _REFLECTION_FILE)
     if not os.path.exists(path):
         return ''
-    with open(path) as f:
-        return json.load(f).get('design_lessons', '')
+    try:
+        with open(path) as f:
+            return json.load(f).get('design_lessons', '')
+    except (json.JSONDecodeError, OSError):
+        return ''
 
 
 def _save_design_lessons(state_dir: str, design_lessons: str) -> None:
     path = os.path.join(state_dir, _REFLECTION_FILE)
     data = {}
     if os.path.exists(path):
-        with open(path) as f:
-            data = json.load(f)
+        try:
+            with open(path) as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            data = {}
     data['design_lessons'] = design_lessons
     with open(path, 'w') as f:
         json.dump(data, f, indent=2)
