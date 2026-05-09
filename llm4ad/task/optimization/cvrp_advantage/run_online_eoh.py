@@ -828,7 +828,8 @@ def main():
         plateau_trigger = trainer.detect_plateau(
             ONLINE_CONFIG['plateau_min_epochs'])
         interval_trigger = (
-            epochs_since_search >= ONLINE_CONFIG['check_interval'])
+            epoch % ONLINE_CONFIG['check_interval'] == 0
+            and epochs_since_search >= ONLINE_CONFIG['check_interval'])
 
         if plateau_trigger or interval_trigger:
             if plateau_trigger:
