@@ -516,12 +516,15 @@ def _save_pomo_checkpoint(trainer, epoch: int, *, final: bool = False):
 
     # curves
     if epoch > 1:
-        trainer.logger.info("Saving log_image")
-        prefix = f'{result_folder}/latest'
-        util_save_log_image_with_label(
-            prefix, log_params_1, trainer.result_log, labels=['train_score'])
-        util_save_log_image_with_label(
-            prefix, log_params_2, trainer.result_log, labels=['train_loss'])
+        try:
+            trainer.logger.info("Saving log_image")
+            prefix = f'{result_folder}/latest'
+            util_save_log_image_with_label(
+                prefix, log_params_1, trainer.result_log, labels=['train_score'])
+            util_save_log_image_with_label(
+                prefix, log_params_2, trainer.result_log, labels=['train_loss'])
+        except Exception:
+            trainer.logger.warning("log_image save failed (non-fatal)")
 
     # model checkpoint
     label = 'final' if final else f'epoch{epoch}'
@@ -540,11 +543,14 @@ def _save_pomo_checkpoint(trainer, epoch: int, *, final: bool = False):
     torch.save(checkpoint_dict,
                f'{result_folder}/checkpoint-{label}.pt')
     if not final:
-        img_prefix = f'{result_folder}/img/checkpoint-{epoch}'
-        util_save_log_image_with_label(
-            img_prefix, log_params_1, trainer.result_log, labels=['train_score'])
-        util_save_log_image_with_label(
-            img_prefix, log_params_2, trainer.result_log, labels=['train_loss'])
+        try:
+            img_prefix = f'{result_folder}/img/checkpoint-{epoch}'
+            util_save_log_image_with_label(
+                img_prefix, log_params_1, trainer.result_log, labels=['train_score'])
+            util_save_log_image_with_label(
+                img_prefix, log_params_2, trainer.result_log, labels=['train_loss'])
+        except Exception:
+            trainer.logger.warning("img checkpoint save failed (non-fatal)")
 
 
 # ---------------------------------------------------------------------------
@@ -765,6 +771,11 @@ def main():
         # --- periodic checkpoint ---
         if epoch % _SAVE_INTERVAL == 0:
             _save_pomo_checkpoint(trainer, epoch)
+            trainer.save_temp_checkpoint(
+                os.path.join(ONLINE_CONFIG['log_dir'], 'resume_checkpoint.pt'))
+            _save_full_state(ONLINE_CONFIG['log_dir'],
+                             controller, current_adv_source,
+                             last_search_epoch, epoch + 1)
 
         # Logging
         elapsed, remain = trainer.time_estimator.get_est_string(
