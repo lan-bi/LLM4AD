@@ -50,7 +50,7 @@ LLM_CONFIG = {
 TRAIN_CONFIG = {
     'problem_size': 100,         # CVRP100
     'pomo_size': 100,            # = problem_size for POMO
-    'epochs': 1000,              # total training epochs
+    'epochs': 3000,              # total training epochs
     'train_episodes': 2000,      # episodes per epoch
     'train_batch_size': 64,
     'use_cuda': True,
@@ -981,6 +981,20 @@ def main():
             _save_full_state(ONLINE_CONFIG['log_dir'],
                              controller, current_adv_source,
                              last_search_epoch, epoch + 1)
+
+        # Save latest images every epoch
+        if epoch > 1:
+            try:
+                lp1 = trainer.trainer_params['logging']['log_image_params_1']
+                lp2 = trainer.trainer_params['logging']['log_image_params_2']
+                util_save_log_image_with_label(
+                    f'{trainer.result_folder}/latest', lp1,
+                    trainer.result_log, labels=['train_score'])
+                util_save_log_image_with_label(
+                    f'{trainer.result_folder}/latest', lp2,
+                    trainer.result_log, labels=['train_loss'])
+            except Exception:
+                pass
 
         # Logging
         elapsed, remain = trainer.time_estimator.get_est_string(
