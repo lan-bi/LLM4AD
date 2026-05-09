@@ -246,7 +246,7 @@ def _run_eoh_and_switch(llm, evaluation, controller,
 _REFLECTION_FILE = 'reflections.json'
 _INSTANT_FILE = 'instant_lessons.json'
 _MAX_ERRORS_PER_REFLECTION = 12
-_LONG_REFLECTION_MAX_CHARS = 600   # trigger summarization above ~150 tokens
+_LONG_REFLECTION_MAX_CHARS = 2400  # trigger summarization above ~600 tokens
 
 
 def _collect_eoh_errors(eoh_log_dir: str) -> dict:
