@@ -47,8 +47,8 @@ LLM_CONFIG = {
 
 # Training configuration (mirrors train_n100.py defaults)
 TRAIN_CONFIG = {
-    'problem_size': 20,          # proxy: CVRP20; set to 100 for production
-    'pomo_size': 20,             # = problem_size for POMO
+    'problem_size': 100,         # CVRP100
+    'pomo_size': 100,            # = problem_size for POMO
     'epochs': 1000,              # total training epochs
     'train_episodes': 2000,      # episodes per epoch
     'train_batch_size': 64,
