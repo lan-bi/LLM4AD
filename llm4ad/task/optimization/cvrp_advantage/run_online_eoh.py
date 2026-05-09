@@ -72,7 +72,7 @@ import torch
 from torch.utils.tensorboard import SummaryWriter
 
 from CVRPTrainer import CVRPTrainer as Trainer
-from utils.utils import set_result_folder
+from utils.utils import create_logger, set_result_folder
 
 from llm4ad.task.optimization.cvrp_advantage import (
     CVRPAdvantageEvaluation,
@@ -506,6 +506,7 @@ def _compile_from_source(source: str | None, template: str):
 def main():
     os.makedirs(ONLINE_CONFIG['log_dir'], exist_ok=True)
     set_result_folder(ONLINE_CONFIG['log_dir'])
+    create_logger(log_file={'desc': 'online_eoh', 'filename': 'run_log'})
 
     # --- build components ---
     llm = HttpsApi(**LLM_CONFIG)
