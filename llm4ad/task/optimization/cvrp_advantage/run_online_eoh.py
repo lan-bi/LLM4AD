@@ -244,7 +244,9 @@ def _run_eoh_and_switch(llm, evaluation, controller,
 # ---------------------------------------------------------------------------
 
 _REFLECTION_FILE = 'reflections.json'
+_INSTANT_FILE = 'instant_lessons.json'
 _MAX_ERRORS_PER_REFLECTION = 12
+_LONG_REFLECTION_MAX_CHARS = 6000  # ~1500 tokens; trigger summarization above this
 
 
 def _collect_eoh_errors(eoh_log_dir: str) -> dict:
@@ -319,7 +321,24 @@ def _call_reflection_agent(llm, error_info: dict, prev_lessons: str) -> str:
     return response.strip()
 
 
-def _load_reflections(state_dir: str) -> str:
+# --- instant lessons: last 2 rounds' error tracebacks → task_description ---
+
+def _save_instant_lessons(state_dir: str, errors: list[str]) -> None:
+    with open(os.path.join(state_dir, _INSTANT_FILE), 'w') as f:
+        json.dump({'errors': errors[-16:]}, f, indent=2)  # keep last 16 tracebacks
+
+
+def _load_instant_lessons(state_dir: str) -> str:
+    path = os.path.join(state_dir, _INSTANT_FILE)
+    if not os.path.exists(path):
+        return ''
+    with open(path) as f:
+        return '\n'.join(json.load(f).get('errors', []))
+
+
+# --- long-term reflections (accumulated + summarized) → should_search / DesignReview ---
+
+def _load_long_reflections(state_dir: str) -> str:
     path = os.path.join(state_dir, _REFLECTION_FILE)
     if not os.path.exists(path):
         return ''
@@ -327,9 +346,31 @@ def _load_reflections(state_dir: str) -> str:
         return json.load(f).get('lessons', '')
 
 
-def _save_reflections(state_dir: str, lessons: str) -> None:
-    with open(os.path.join(state_dir, _REFLECTION_FILE), 'w') as f:
-        json.dump({'lessons': lessons}, f, indent=2)
+def _save_long_reflections(state_dir: str, lessons: str) -> None:
+    path = os.path.join(state_dir, _REFLECTION_FILE)
+    old = {}
+    if os.path.exists(path):
+        with open(path) as f:
+            old = json.load(f)
+    old['lessons'] = lessons
+    with open(path, 'w') as f:
+        json.dump(old, f, indent=2)
+
+
+def _summarize_reflections(llm, lessons: str) -> str:
+    """If lessons exceed threshold, ask LLM to compress into concise summary."""
+    if len(lessons) <= _LONG_REFLECTION_MAX_CHARS:
+        return lessons
+    prompt = (
+        "Condense the following accumulated lessons from CVRP advantage-function "
+        "design into a concise summary (max 8 bullet points). Keep ALL distinct "
+        "error categories. Drop redundancies.\n\n"
+        + lessons
+    )
+    try:
+        return llm.draw_sample(prompt).strip()
+    except Exception:
+        return lessons[:_LONG_REFLECTION_MAX_CHARS]  # fallback: truncation
 
 
 def _augment_task_description(base: str, reflections: str) -> str:
@@ -610,12 +651,12 @@ def main():
         trainer.logger.info(
             '=== Resumed from checkpoint (epoch %d, %d controller records) ===',
             start_epoch, len(controller.history))
-        # Apply any persisted reflections to the evaluation
-        err_lessons = _load_reflections(ONLINE_CONFIG['log_dir'])
+        # Apply persisted instant lessons to evaluation
+        instant = _load_instant_lessons(ONLINE_CONFIG['log_dir'])
         design_lessons = _load_design_lessons(ONLINE_CONFIG['log_dir'])
-        if err_lessons or design_lessons:
+        if instant or design_lessons:
             evaluation._task_description = _augment_task_description_full(
-                task_description, err_lessons, design_lessons)
+                task_description, instant, design_lessons)
     else:
         trainer.logger.info('=== Online EoH-integrated training started ===')
 
@@ -682,9 +723,9 @@ def main():
                 trigger_reason = 'plateau'
             else:
                 # Ask LLM whether to search, with accumulated EoH experience
-                err_lessons = _load_reflections(ONLINE_CONFIG['log_dir'])
+                long_lessons = _load_long_reflections(ONLINE_CONFIG['log_dir'])
                 design_lessons = _load_design_lessons(ONLINE_CONFIG['log_dir'])
-                all_reflections = (err_lessons or '') + '\n' + (design_lessons or '')
+                all_reflections = (long_lessons or '') + '\n' + (design_lessons or '')
                 all_reflections = all_reflections.strip()
                 llm_ok = controller.should_search(
                     epoch=epoch,
@@ -750,10 +791,18 @@ def main():
                 eoh_log = os.path.join(ONLINE_CONFIG['log_dir'],
                                        f'eoh_epoch{epoch}')
                 err_info = _collect_eoh_errors(eoh_log)
-                old_err = _load_reflections(ONLINE_CONFIG['log_dir'])
-                new_err = _call_reflection_agent(llm, err_info, old_err)
-                if new_err != old_err:
-                    _save_reflections(ONLINE_CONFIG['log_dir'], new_err)
+
+                # instant: raw tracebacks → task_description for next EoH
+                _save_instant_lessons(ONLINE_CONFIG['log_dir'],
+                                     err_info['errors'])
+                instant = _load_instant_lessons(ONLINE_CONFIG['log_dir'])
+
+                # long-term: accumulated + summarized → should_search / DesignReview
+                old_long = _load_long_reflections(ONLINE_CONFIG['log_dir'])
+                new_long = _call_reflection_agent(llm, err_info, old_long)
+                if new_long != old_long:
+                    new_long = _summarize_reflections(llm, new_long)
+                    _save_long_reflections(ONLINE_CONFIG['log_dir'], new_long)
 
                 # --- design review: periodic analysis of best/worst ---
                 n_searches = len(controller.history)
@@ -769,7 +818,7 @@ def main():
                         old_design = new_design
 
                 evaluation._task_description = _augment_task_description_full(
-                    task_description, new_err, old_design)
+                    task_description, instant, old_design)
 
                 last_search_epoch = epoch
                 _state['last_search_epoch'] = last_search_epoch
