@@ -119,7 +119,9 @@ class CVRPAdvantageEvaluation(Evaluation):
         if score_def is None:
             return None
 
-        return float(score_cand - score_def)
+        # score = route distance, lower is better.
+        # Return positive delta when candidate beats default.
+        return float(score_def - score_cand)
 
     # ------------------------------------------------------------------
     #  Internal helpers
