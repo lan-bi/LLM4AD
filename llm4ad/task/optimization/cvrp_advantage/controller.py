@@ -187,8 +187,86 @@ class SearchController:
                 entry.effective,
                 len(self.history))
 
+    def should_search(self,
+                      epoch: int,
+                      recent_scores: list[float],
+                      recent_losses: list[float],
+                      plateau_epochs: int,
+                      total_epochs: int,
+                      reflections: str = '') -> bool:
+        """Ask LLM whether to trigger an EoH search now. Returns True/False."""
+        try:
+            prompt = self._build_check_prompt(
+                epoch, recent_scores, recent_losses,
+                plateau_epochs, total_epochs, reflections)
+
+            if self._logger:
+                self._logger.info(
+                    'CHECK epoch=%d plateau=%d '
+                    'score=%.4f→%.4f history=%d',
+                    epoch, plateau_epochs,
+                    recent_scores[0], recent_scores[-1],
+                    len(self.history))
+                self._logger.debug('--- CHECK PROMPT ---\n%s\n'
+                                   '--- END PROMPT ---', prompt)
+
+            response = self._llm.draw_sample(prompt)
+
+            if self._logger:
+                self._logger.info('CHECK response: %r', response)
+
+            return self._parse_yes_no(response)
+        except Exception as exc:
+            if self._logger:
+                self._logger.warning('CHECK failed (default NO): %s', exc)
+            return False
+
     # ------------------------------------------------------------------
     #  Prompt construction
+    # ------------------------------------------------------------------
+
+    def _build_check_prompt(self,
+                            epoch: int,
+                            recent_scores: list[float],
+                            recent_losses: list[float],
+                            plateau_epochs: int,
+                            total_epochs: int,
+                            reflections: str = '') -> str:
+        """Prompt asking LLM YES/NO: should we search now?"""
+        lines = [
+            f"Training epoch: {epoch}/{total_epochs}",
+            f"Score trend (lower=better): {self._format_series(recent_scores)}",
+            f"Loss trend: {self._format_series(recent_losses)}",
+            f"Plateau (epochs since last best): {plateau_epochs}",
+            f"EoH searches so far: {len(self.history)}",
+        ]
+        if self.history:
+            effective = sum(1 for r in self.history if r.effective)
+            lines.append(f"  Effective switches: {effective}")
+            last = self.history[-1]
+            lines.append(
+                f"  Last search: epoch {last.trigger_epoch}, "
+                f"delta={last.best_delta:+.4f}, "
+                f"{'effective' if last.effective else 'discarded'}")
+
+        if reflections:
+            lines.append(f"\nPast EoH experience:\n{reflections}")
+
+        lines += [
+            "",
+            "Should we run an EoH search NOW to design a better advantage function?",
+            "YES — if training seems stuck, or past searches were helpful.",
+            "NO  — if score is still improving well, or past searches were ineffective.",
+            "Reply exactly YES or NO (single word).",
+        ]
+        return '\n'.join(lines)
+
+    @staticmethod
+    def _parse_yes_no(response: str) -> bool:
+        return response.strip().upper().startswith('YES')
+
+    # ------------------------------------------------------------------
+    #  Prompt construction (for decide)
     # ------------------------------------------------------------------
 
     def _build_meta_prompt(self,

@@ -59,9 +59,8 @@ TRAIN_CONFIG = {
 
 # Online EoH configuration
 ONLINE_CONFIG = {
-    'plateau_min_epochs': 25,    # trigger search after this many non-improving epochs
-    'force_search_every': 80,    # periodic trigger — no longer requires prior search
-    'first_search_epoch': 80,    # absolute deadline: force first EoH at this epoch
+    'plateau_min_epochs': 25,    # hard fallback: trigger if no improvement for this long
+    'check_interval': 30,        # every N epochs, ask LLM whether to search
     'log_dir': './logs/online_eoh',
     'eval_timeout_seconds': 120,
     'design_review_interval': 3,  # run design review every N EoH searches
@@ -675,100 +674,116 @@ def main():
         epochs_since_search = epoch - last_search_epoch
         plateau_trigger = trainer.detect_plateau(
             ONLINE_CONFIG['plateau_min_epochs'])
-        periodic_trigger = (
-            epochs_since_search >= ONLINE_CONFIG['force_search_every'])
-        first_trigger = (
-            last_search_epoch == 0
-            and epoch == ONLINE_CONFIG['first_search_epoch'])
+        interval_trigger = (
+            epochs_since_search >= ONLINE_CONFIG['check_interval'])
 
-        if plateau_trigger or periodic_trigger or first_trigger:
-            if first_trigger:
-                trigger_reason = 'first'
-            elif plateau_trigger:
+        if plateau_trigger or interval_trigger:
+            if plateau_trigger:
                 trigger_reason = 'plateau'
             else:
-                trigger_reason = 'periodic'
-            trainer.logger.info(
-                'Triggering EoH search (reason=%s, epoch=%d, plateau=%d epochs)',
-                trigger_reason, epoch, trainer.plateau_counter)
+                # Ask LLM whether to search, with accumulated EoH experience
+                err_lessons = _load_reflections(ONLINE_CONFIG['log_dir'])
+                design_lessons = _load_design_lessons(ONLINE_CONFIG['log_dir'])
+                all_reflections = (err_lessons or '') + '\n' + (design_lessons or '')
+                all_reflections = all_reflections.strip()
+                llm_ok = controller.should_search(
+                    epoch=epoch,
+                    recent_scores=trainer.score_history[-50:],
+                    recent_losses=trainer.loss_history[-50:],
+                    plateau_epochs=trainer.plateau_counter,
+                    total_epochs=TRAIN_CONFIG['epochs'],
+                    reflections=all_reflections,
+                )
+                if not llm_ok:
+                    trainer.logger.info(
+                        'LLM decided NOT to search (epoch=%d, plateau=%d)',
+                        epoch, trainer.plateau_counter)
+                    plateau_trigger = False  # suppress search, fall through to logging
+                    interval_trigger = False
+                else:
+                    trigger_reason = 'llm'
+            if plateau_trigger or interval_trigger:
+                trainer.logger.info(
+                    'Triggering EoH search (reason=%s, epoch=%d, plateau=%d epochs)',
+                    trigger_reason, epoch, trainer.plateau_counter)
 
-            # Save checkpoint for evaluation
-            ckpt_path = os.path.join(
-                ONLINE_CONFIG['log_dir'],
-                f'temp_ckpt_epoch{epoch}.pt')
-            trainer.save_temp_checkpoint(ckpt_path)
-            evaluation.set_context(
-                ckpt_path,
-                TRAIN_CONFIG['problem_size'],
-                TRAIN_CONFIG['pomo_size'])
+                # Save checkpoint for evaluation
+                ckpt_path = os.path.join(
+                    ONLINE_CONFIG['log_dir'],
+                    f'temp_ckpt_epoch{epoch}.pt')
+                trainer.save_temp_checkpoint(ckpt_path)
+                evaluation.set_context(
+                    ckpt_path,
+                    TRAIN_CONFIG['problem_size'],
+                    TRAIN_CONFIG['pomo_size'])
 
-            # Controller decides hyperparams
-            decision = controller.decide(
-                epoch=epoch,
-                recent_scores=trainer.score_history[-50:],
-                recent_losses=trainer.loss_history[-50:],
-                plateau_epochs=trainer.plateau_counter,
-                total_epochs=TRAIN_CONFIG['epochs'],
-            )
+                # Controller decides hyperparams
+                decision = controller.decide(
+                    epoch=epoch,
+                    recent_scores=trainer.score_history[-50:],
+                    recent_losses=trainer.loss_history[-50:],
+                    plateau_epochs=trainer.plateau_counter,
+                    total_epochs=TRAIN_CONFIG['epochs'],
+                )
 
-            # Run EoH and switch if effective
-            switched, fn_source = _run_eoh_and_switch(
-                llm, evaluation, controller, trainer, epoch, decision)
+                # Run EoH and switch if effective
+                switched, fn_source = _run_eoh_and_switch(
+                    llm, evaluation, controller, trainer, epoch, decision)
 
-            if switched:
-                current_adv_source = fn_source
-                _state['current_adv_source'] = current_adv_source
+                if switched:
+                    current_adv_source = fn_source
+                    _state['current_adv_source'] = current_adv_source
 
-            # --- TensorBoard EoH events ---
-            writer.add_scalar('EoH/TriggerEpoch', epoch, len(controller.history))
-            writer.add_scalar('EoH/BestDelta',
-                controller.history[-1].best_delta if controller.history else 0,
-                len(controller.history))
-            writer.add_scalar('EoH/Effective',
-                1 if (controller.history and controller.history[-1].effective) else 0,
-                len(controller.history))
-            intensity_val = {'light': 1, 'medium': 2, 'heavy': 3}.get(
-                decision.search_intensity, 2)
-            writer.add_scalar('EoH/Intensity', intensity_val, len(controller.history))
+                # --- TensorBoard EoH events ---
+                writer.add_scalar('EoH/TriggerEpoch', epoch, len(controller.history))
+                writer.add_scalar('EoH/BestDelta',
+                    controller.history[-1].best_delta if controller.history else 0,
+                    len(controller.history))
+                writer.add_scalar('EoH/Effective',
+                    1 if (controller.history and controller.history[-1].effective) else 0,
+                    len(controller.history))
+                intensity_val = {'light': 1, 'medium': 2, 'heavy': 3}.get(
+                    decision.search_intensity, 2)
+                writer.add_scalar('EoH/Intensity', intensity_val, len(controller.history))
 
-            # --- reflection: learn from evaluation failures ---
-            eoh_log = os.path.join(ONLINE_CONFIG['log_dir'],
-                                   f'eoh_epoch{epoch}')
-            err_info = _collect_eoh_errors(eoh_log)
-            old_err = _load_reflections(ONLINE_CONFIG['log_dir'])
-            new_err = _call_reflection_agent(llm, err_info, old_err)
-            if new_err != old_err:
-                _save_reflections(ONLINE_CONFIG['log_dir'], new_err)
+                # --- reflection: learn from evaluation failures ---
+                eoh_log = os.path.join(ONLINE_CONFIG['log_dir'],
+                                       f'eoh_epoch{epoch}')
+                err_info = _collect_eoh_errors(eoh_log)
+                old_err = _load_reflections(ONLINE_CONFIG['log_dir'])
+                new_err = _call_reflection_agent(llm, err_info, old_err)
+                if new_err != old_err:
+                    _save_reflections(ONLINE_CONFIG['log_dir'], new_err)
 
-            # --- design review: periodic analysis of best/worst ---
-            n_searches = len(controller.history)
-            interval = ONLINE_CONFIG['design_review_interval']
-            old_design = _load_design_lessons(ONLINE_CONFIG['log_dir'])
-            if n_searches > 0 and n_searches % interval == 0:
-                best_fns, worst_fns = _collect_best_worst_functions(
-                    ONLINE_CONFIG['log_dir'])
-                new_design = _call_design_review_agent(
-                    llm, best_fns, worst_fns, old_design)
-                if new_design != old_design:
-                    _save_design_lessons(ONLINE_CONFIG['log_dir'], new_design)
-                    old_design = new_design
+                # --- design review: periodic analysis of best/worst ---
+                n_searches = len(controller.history)
+                interval = ONLINE_CONFIG['design_review_interval']
+                old_design = _load_design_lessons(ONLINE_CONFIG['log_dir'])
+                if n_searches > 0 and n_searches % interval == 0:
+                    best_fns, worst_fns = _collect_best_worst_functions(
+                        ONLINE_CONFIG['log_dir'])
+                    new_design = _call_design_review_agent(
+                        llm, best_fns, worst_fns, old_design)
+                    if new_design != old_design:
+                        _save_design_lessons(ONLINE_CONFIG['log_dir'], new_design)
+                        old_design = new_design
 
-            evaluation._task_description = _augment_task_description_full(
-                task_description, new_err, old_design)
+                evaluation._task_description = _augment_task_description_full(
+                    task_description, new_err, old_design)
 
-            last_search_epoch = epoch
-            _state['last_search_epoch'] = last_search_epoch
+                last_search_epoch = epoch
+                _state['last_search_epoch'] = last_search_epoch
 
-            # Persist full state for resume
-            trainer.save_temp_checkpoint(
-                os.path.join(ONLINE_CONFIG['log_dir'],
-                             'resume_checkpoint.pt'))
-            _save_full_state(
-                ONLINE_CONFIG['log_dir'],
-                controller, current_adv_source,
-                last_search_epoch, epoch + 1)
+                # Persist full state for resume
+                trainer.save_temp_checkpoint(
+                    os.path.join(ONLINE_CONFIG['log_dir'],
+                                 'resume_checkpoint.pt'))
+                _save_full_state(
+                    ONLINE_CONFIG['log_dir'],
+                    controller, current_adv_source,
+                    last_search_epoch, epoch + 1)
 
-            os.remove(ckpt_path)
+                os.remove(ckpt_path)
 
         # TensorBoard training curves
         writer.add_scalar('Train/Score', train_score, epoch)
