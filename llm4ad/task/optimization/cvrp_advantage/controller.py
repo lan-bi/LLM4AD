@@ -203,6 +203,7 @@ class SearchController:
         state_lines = [
             f"Current epoch: {epoch} / {total_epochs} ({100*epoch//total_epochs}%)",
             f"Plateau detected: {plateau_epochs} epochs without improvement",
+            "(Note: train score = avg route distance; LOWER score = better routes)",
             f"Recent train scores (last {len(recent_scores)} epochs):",
             f"  {self._format_series(recent_scores)}",
             f"Recent train losses (last {len(recent_losses)} epochs):",
