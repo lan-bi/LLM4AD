@@ -66,6 +66,7 @@ class CVRPAdvantageEvaluation(Evaluation):
         self._checkpoint_path: str | None = None
         self._problem_size: int = 100
         self._pomo_size: int = 100
+        self._error_log_path: str | None = None
 
     # ------------------------------------------------------------------
     #  Public API for the trainer
@@ -74,15 +75,18 @@ class CVRPAdvantageEvaluation(Evaluation):
     def set_context(self,
                     checkpoint_path: str,
                     problem_size: int,
-                    pomo_size: int) -> None:
+                    pomo_size: int,
+                    error_log_path: str | None = None) -> None:
         """Store the current model checkpoint so evaluations are A/B-comparable.
 
         Call this *before* starting an EoH round so every candidate is compared
-        from the same starting point.
+        from the same starting point.  If *error_log_path* is given, runtime
+        errors from evaluations are appended there.
         """
         self._checkpoint_path = checkpoint_path
         self._problem_size = problem_size
         self._pomo_size = pomo_size
+        self._error_log_path = error_log_path
 
     # ------------------------------------------------------------------
     #  LLM4AD interface
@@ -152,6 +156,12 @@ class CVRPAdvantageEvaluation(Evaluation):
             return float(np.mean(batch_scores[-3:]))
         except Exception:
             traceback.print_exc()
+            if self._error_log_path:
+                try:
+                    with open(self._error_log_path, 'a') as ef:
+                        traceback.print_exc(file=ef)
+                except Exception:
+                    pass
             return None
         finally:
             import shutil

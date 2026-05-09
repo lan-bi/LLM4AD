@@ -249,9 +249,11 @@ _MAX_ERRORS_PER_REFLECTION = 12
 _LONG_REFLECTION_MAX_CHARS = 2400  # trigger summarization above ~600 tokens
 
 
-def _collect_eoh_errors(eoh_log_dir: str) -> dict:
-    """Scan EoH profiler logs for failure stats + traceback excerpts."""
+def _collect_eoh_errors(eoh_log_dir: str,
+                        error_log_path: str = None) -> dict:
+    """Scan EoH profiler logs + optional error log for failure info."""
     info = {'total': 0, 'valid': 0, 'errors': []}
+    # --- count from samples JSON ---
     for entry in sorted(os.listdir(eoh_log_dir)):
         inner = os.path.join(eoh_log_dir, entry)
         if not os.path.isdir(inner):
@@ -268,6 +270,7 @@ def _collect_eoh_errors(eoh_log_dir: str) -> dict:
                 info['total'] += 1
                 if sample.get('score') is not None:
                     info['valid'] += 1
+    # --- scrape profiler run_log.txt ---
     for entry in sorted(os.listdir(eoh_log_dir)):
         inner = os.path.join(eoh_log_dir, entry)
         if not os.path.isdir(inner):
@@ -283,6 +286,17 @@ def _collect_eoh_errors(eoh_log_dir: str) -> dict:
         for block in tb_blocks:
             lines = block.strip().splitlines()
             short = '\n'.join(lines[-4:]) if len(lines) > 4 else block
+            info['errors'].append(short)
+    # --- scrape evaluation error log (real tracebacks from subprocess) ---
+    if error_log_path and os.path.exists(error_log_path):
+        with open(error_log_path, errors='replace') as f:
+            text = f.read()
+        tb_blocks = re.findall(
+            r'(Traceback \(most recent call last\):.*?)(?=\n\n|\Z)',
+            text, re.DOTALL)
+        for block in tb_blocks:
+            lines = block.strip().splitlines()
+            short = '\n'.join(lines[-3:]) if len(lines) > 3 else block
             info['errors'].append(short)
     info['errors'] = info['errors'][:_MAX_ERRORS_PER_REFLECTION]
     info['failed'] = info['total'] - info['valid']
@@ -752,11 +766,14 @@ def main():
                 ckpt_path = os.path.join(
                     ONLINE_CONFIG['log_dir'],
                     f'temp_ckpt_epoch{epoch}.pt')
+                error_log_path = os.path.join(
+                    ONLINE_CONFIG['log_dir'], f'errors_epoch{epoch}.log')
                 trainer.save_temp_checkpoint(ckpt_path)
                 evaluation.set_context(
                     ckpt_path,
                     TRAIN_CONFIG['problem_size'],
-                    TRAIN_CONFIG['pomo_size'])
+                    TRAIN_CONFIG['pomo_size'],
+                    error_log_path=error_log_path)
 
                 # Controller decides hyperparams
                 decision = controller.decide(
@@ -790,7 +807,7 @@ def main():
                 # --- reflection: learn from evaluation failures ---
                 eoh_log = os.path.join(ONLINE_CONFIG['log_dir'],
                                        f'eoh_epoch{epoch}')
-                err_info = _collect_eoh_errors(eoh_log)
+                err_info = _collect_eoh_errors(eoh_log, error_log_path)
 
                 # instant: raw tracebacks → task_description for next EoH
                 _save_instant_lessons(ONLINE_CONFIG['log_dir'],
@@ -833,6 +850,8 @@ def main():
                     last_search_epoch, epoch + 1)
 
                 os.remove(ckpt_path)
+                if os.path.exists(error_log_path):
+                    os.remove(error_log_path)
 
         # TensorBoard training curves
         writer.add_scalar('Train/Score', train_score, epoch)
