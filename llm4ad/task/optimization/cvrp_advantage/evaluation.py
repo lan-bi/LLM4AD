@@ -67,6 +67,7 @@ class CVRPAdvantageEvaluation(Evaluation):
         self._problem_size: int = 100
         self._pomo_size: int = 100
         self._error_log_path: str | None = None
+        self._eval_epoch: int = 1
 
     # ------------------------------------------------------------------
     #  Public API for the trainer
@@ -76,7 +77,8 @@ class CVRPAdvantageEvaluation(Evaluation):
                     checkpoint_path: str,
                     problem_size: int,
                     pomo_size: int,
-                    error_log_path: str | None = None) -> None:
+                    error_log_path: str | None = None,
+                    eval_epoch: int = 1) -> None:
         """Store the current model checkpoint so evaluations are A/B-comparable.
 
         Call this *before* starting an EoH round so every candidate is compared
@@ -87,6 +89,7 @@ class CVRPAdvantageEvaluation(Evaluation):
         self._problem_size = problem_size
         self._pomo_size = pomo_size
         self._error_log_path = error_log_path
+        self._eval_epoch = eval_epoch
 
     # ------------------------------------------------------------------
     #  LLM4AD interface
@@ -151,12 +154,14 @@ class CVRPAdvantageEvaluation(Evaluation):
             trainer.reward_ema = checkpoint.get('reward_ema')
 
             batch_scores = []
+            eval_epoch = getattr(self, '_eval_epoch', 1)
             for _ in range(N_EVAL_BATCHES):
-                score, _ = trainer._train_one_batch(EVAL_BATCH_SIZE, epoch=1)
+                score, _ = trainer._train_one_batch(EVAL_BATCH_SIZE,
+                                                    epoch=eval_epoch)
                 batch_scores.append(score)
 
-            # Use the last 3 batches for stability
-            return float(np.mean(batch_scores[-3:]))
+            # Use all batches — EMAs now restored from checkpoint, no warm-up needed
+            return float(np.mean(batch_scores))
         except Exception:
             traceback.print_exc()
             if self._error_log_path:

@@ -875,7 +875,8 @@ def main():
                     ckpt_path,
                     TRAIN_CONFIG['problem_size'],
                     TRAIN_CONFIG['pomo_size'],
-                    error_log_path=error_log_path)
+                    error_log_path=error_log_path,
+                    eval_epoch=epoch)
 
                 # Controller decides hyperparams
                 decision = controller.decide(
