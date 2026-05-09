@@ -445,6 +445,11 @@ def main():
         trainer.logger.info(
             '=== Resumed from checkpoint (epoch %d, %d controller records) ===',
             start_epoch, len(controller.history))
+        # Apply any persisted reflections to the evaluation
+        reflections = _load_reflections(ONLINE_CONFIG['log_dir'])
+        if reflections:
+            evaluation._task_description = _augment_task_description(
+                task_description, reflections)
     else:
         trainer.logger.info('=== Online EoH-integrated training started ===')
 
