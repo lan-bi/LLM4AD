@@ -62,6 +62,7 @@ ONLINE_CONFIG = {
     'force_search_every': 100,   # force a search at least every N epochs
     'log_dir': './logs/online_eoh',
     'eval_timeout_seconds': 120,
+    'design_review_interval': 3,  # run design review every N EoH searches
 }
 
 # ---------------------------------------------------------------------------
@@ -339,6 +340,110 @@ def _augment_task_description(base: str, reflections: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+#  Design review – periodic analysis of good vs bad functions
+# ---------------------------------------------------------------------------
+
+def _collect_best_worst_functions(log_root: str, top_k: int = 2
+                                   ) -> tuple[list, list]:
+    """Scan all EoH round logs, return (best_funcs, worst_funcs)."""
+    all_funcs = []  # (score, func_str)
+    for entry in sorted(os.listdir(log_root)):
+        if not entry.startswith('eoh_epoch'):
+            continue
+        eoh_dir = os.path.join(log_root, entry)
+        for inner in sorted(os.listdir(eoh_dir)):
+            samples_dir = os.path.join(eoh_dir, inner, 'samples')
+            if not os.path.isdir(samples_dir):
+                continue
+            for fname in sorted(os.listdir(samples_dir)):
+                if not (fname.startswith('samples_') and fname.endswith('.json')):
+                    continue
+                with open(os.path.join(samples_dir, fname)) as f:
+                    data = json.load(f)
+                for sample in data:
+                    s = sample.get('score')
+                    if s is None:
+                        continue
+                    fn = sample.get('function', '')
+                    all_funcs.append((s, fn))
+    if not all_funcs:
+        return [], []
+    all_funcs.sort(key=lambda x: x[0])
+    worst = all_funcs[:top_k]
+    best = all_funcs[-top_k:]
+    return best[::-1], worst
+
+
+_TRUNC_FN_LENGTH = 600
+
+
+def _call_design_review_agent(llm, best_funcs: list, worst_funcs: list,
+                              prev_design_lessons: str) -> str:
+    """Ask LLM to compare best vs worst functions → design patterns."""
+    if not best_funcs and not worst_funcs:
+        return prev_design_lessons or ''
+    parts = ["Compare the best and worst CVRP advantage functions below.",
+             "Identify what patterns make the good functions better."]
+    if best_funcs:
+        parts.append("\nTop-scoring functions:")
+        for i, (score, fn) in enumerate(best_funcs, 1):
+            parts.append(f"  #{i} (score={score:+.4f}):\n    {fn[:_TRUNC_FN_LENGTH]}")
+    if worst_funcs:
+        parts.append("\nLowest-scoring valid functions:")
+        for i, (score, fn) in enumerate(worst_funcs, 1):
+            parts.append(f"  #{i} (score={score:+.4f}):\n    {fn[:_TRUNC_FN_LENGTH]}")
+    if prev_design_lessons:
+        parts.append(f"\nPrevious design lessons:\n{prev_design_lessons}")
+    parts += [
+        "",
+        "Output 2-4 concise bullet points (each '- ') of actionable design advice.",
+        "If no new patterns, output exactly 'NO_NEW_LESSONS'.",
+    ]
+    prompt = '\n'.join(parts)
+    try:
+        response = llm.draw_sample(prompt)
+    except Exception:
+        response = 'NO_NEW_LESSONS'
+    if 'NO_NEW_LESSONS' in response:
+        return prev_design_lessons or ''
+    if prev_design_lessons:
+        return prev_design_lessons.strip() + '\n' + response.strip()
+    return response.strip()
+
+
+def _load_design_lessons(state_dir: str) -> str:
+    path = os.path.join(state_dir, _REFLECTION_FILE)
+    if not os.path.exists(path):
+        return ''
+    with open(path) as f:
+        return json.load(f).get('design_lessons', '')
+
+
+def _save_design_lessons(state_dir: str, design_lessons: str) -> None:
+    path = os.path.join(state_dir, _REFLECTION_FILE)
+    data = {}
+    if os.path.exists(path):
+        with open(path) as f:
+            data = json.load(f)
+    data['design_lessons'] = design_lessons
+    with open(path, 'w') as f:
+        json.dump(data, f, indent=2)
+
+
+def _augment_task_description_full(base: str, error_lessons: str,
+                                   design_lessons: str) -> str:
+    """Append both error-prevention and design-pattern lessons."""
+    result = base
+    if error_lessons:
+        result += ('\n\n## Error Prevention (lessons from runtime failures)\n'
+                   + 'Avoid these patterns:\n\n' + error_lessons)
+    if design_lessons:
+        result += ('\n\n## Design Patterns That Work (lessons from scoring)\n'
+                   + 'Good functions tend to:\n\n' + design_lessons)
+    return result
+
+
+# ---------------------------------------------------------------------------
 #  Full-state persistence (for resume)
 # ---------------------------------------------------------------------------
 
@@ -446,10 +551,11 @@ def main():
             '=== Resumed from checkpoint (epoch %d, %d controller records) ===',
             start_epoch, len(controller.history))
         # Apply any persisted reflections to the evaluation
-        reflections = _load_reflections(ONLINE_CONFIG['log_dir'])
-        if reflections:
-            evaluation._task_description = _augment_task_description(
-                task_description, reflections)
+        err_lessons = _load_reflections(ONLINE_CONFIG['log_dir'])
+        design_lessons = _load_design_lessons(ONLINE_CONFIG['log_dir'])
+        if err_lessons or design_lessons:
+            evaluation._task_description = _augment_task_description_full(
+                task_description, err_lessons, design_lessons)
     else:
         trainer.logger.info('=== Online EoH-integrated training started ===')
 
@@ -523,12 +629,26 @@ def main():
             eoh_log = os.path.join(ONLINE_CONFIG['log_dir'],
                                    f'eoh_epoch{epoch}')
             err_info = _collect_eoh_errors(eoh_log)
-            old_lessons = _load_reflections(ONLINE_CONFIG['log_dir'])
-            new_lessons = _call_reflection_agent(llm, err_info, old_lessons)
-            if new_lessons != old_lessons:
-                _save_reflections(ONLINE_CONFIG['log_dir'], new_lessons)
-            evaluation._task_description = _augment_task_description(
-                task_description, new_lessons)
+            old_err = _load_reflections(ONLINE_CONFIG['log_dir'])
+            new_err = _call_reflection_agent(llm, err_info, old_err)
+            if new_err != old_err:
+                _save_reflections(ONLINE_CONFIG['log_dir'], new_err)
+
+            # --- design review: periodic analysis of best/worst ---
+            n_searches = len(controller.history)
+            interval = ONLINE_CONFIG['design_review_interval']
+            old_design = _load_design_lessons(ONLINE_CONFIG['log_dir'])
+            if n_searches > 0 and n_searches % interval == 0:
+                best_fns, worst_fns = _collect_best_worst_functions(
+                    ONLINE_CONFIG['log_dir'])
+                new_design = _call_design_review_agent(
+                    llm, best_fns, worst_fns, old_design)
+                if new_design != old_design:
+                    _save_design_lessons(ONLINE_CONFIG['log_dir'], new_design)
+                    old_design = new_design
+
+            evaluation._task_description = _augment_task_description_full(
+                task_description, new_err, old_design)
 
             last_search_epoch = epoch
 
