@@ -69,6 +69,7 @@ ONLINE_CONFIG = {
 #  Imports (after path setup)
 # ---------------------------------------------------------------------------
 import torch
+from torch.utils.tensorboard import SummaryWriter
 
 from CVRPTrainer import CVRPTrainer as Trainer
 from utils.utils import set_result_folder
@@ -514,6 +515,10 @@ def main():
     evaluation = CVRPAdvantageEvaluation(
         timeout_seconds=ONLINE_CONFIG['eval_timeout_seconds'])
 
+    # --- TensorBoard ---
+    tb_dir = os.path.join(ONLINE_CONFIG['log_dir'], 'tensorboard')
+    writer = SummaryWriter(log_dir=tb_dir)
+
     # --- resume from checkpoint if available ---
     full_state = _load_full_state(ONLINE_CONFIG['log_dir'])
     last_search_epoch = 0
@@ -625,6 +630,18 @@ def main():
             if switched:
                 current_adv_source = fn_source
 
+            # --- TensorBoard EoH events ---
+            writer.add_scalar('EoH/TriggerEpoch', epoch, len(controller.history))
+            writer.add_scalar('EoH/BestDelta',
+                controller.history[-1].best_delta if controller.history else 0,
+                len(controller.history))
+            writer.add_scalar('EoH/Effective',
+                1 if (controller.history and controller.history[-1].effective) else 0,
+                len(controller.history))
+            intensity_val = {'light': 1, 'medium': 2, 'heavy': 3}.get(
+                decision.search_intensity, 2)
+            writer.add_scalar('EoH/Intensity', intensity_val, len(controller.history))
+
             # --- reflection: learn from evaluation failures ---
             eoh_log = os.path.join(ONLINE_CONFIG['log_dir'],
                                    f'eoh_epoch{epoch}')
@@ -663,6 +680,12 @@ def main():
 
             os.remove(ckpt_path)
 
+        # TensorBoard training curves
+        writer.add_scalar('Train/Score', train_score, epoch)
+        writer.add_scalar('Train/Loss', train_loss, epoch)
+        writer.add_scalar('Train/Plateau', trainer.plateau_counter, epoch)
+        writer.add_scalar('Train/BestScore', trainer.best_score, epoch)
+
         # Logging
         elapsed, remain = trainer.time_estimator.get_est_string(
             epoch, TRAIN_CONFIG['epochs'])
@@ -674,6 +697,7 @@ def main():
             trainer.plateau_counter, trainer.best_score,
             elapsed, remain)
 
+    writer.close()
     trainer.logger.info('=== Training complete ===')
     trainer.logger.info('Total EoH searches: %d', len(controller.history))
     trainer.logger.info('Effective switches: %d',
