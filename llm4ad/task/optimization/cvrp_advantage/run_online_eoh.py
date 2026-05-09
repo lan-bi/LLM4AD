@@ -852,6 +852,9 @@ def main():
                 evaluation._task_description = _augment_task_description_full(
                     task_description, instant, old_design)
 
+                # Reset plateau so EoH doesn't retrigger every epoch
+                trainer.plateau_counter = 0
+
                 last_search_epoch = epoch
                 _state['last_search_epoch'] = last_search_epoch
 
