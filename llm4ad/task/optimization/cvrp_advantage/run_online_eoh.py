@@ -821,6 +821,38 @@ def main():
         else:
             trainer.plateau_counter += 1
 
+        # --- Rollback check: revert bad functions ---
+        rollback_left = _state.get('rollback_countdown', 0)
+        if rollback_left > 0:
+            rollback_left -= 1
+            _state['rollback_countdown'] = rollback_left
+            if rollback_left == 0:
+                pre_best = _state.get('rollback_best_pre', float('inf'))
+                # Score worsened >2% over the probation period → revert
+                if (trainer.best_score > pre_best * 1.02
+                        and current_adv_source is not None):
+                    trainer.logger.warning(
+                        'ROLLBACK: best_score %.4f → %.4f, '
+                        'reverting to default advantage',
+                        pre_best, trainer.best_score)
+                    trainer.switch_advantage(Trainer._default_advantage)
+                    current_adv_source = None
+                    _state['current_adv_source'] = None
+                    # Record rollback in controller history
+                    controller.record(SearchRecord(
+                        trigger_epoch=epoch,
+                        pre_switch_score=trainer.score_history[-1],
+                        search_intensity='light',
+                        sample_count=0,
+                        operators=[],
+                        pop_size=0,
+                        direction_hint='rollback',
+                        best_delta=0.0,
+                        effective=True,
+                    ))
+                    # Reset plateau so we don't immediately re-trigger
+                    trainer.plateau_counter = 0
+
         # --- Search trigger check ---
         epochs_since_search = epoch - last_search_epoch
         plateau_trigger = trainer.detect_plateau(
@@ -890,6 +922,9 @@ def main():
                 if switched:
                     current_adv_source = fn_source
                     _state['current_adv_source'] = current_adv_source
+                    # Start rollback timer: revert if score worsens 2% in 15 epochs
+                    _state['rollback_countdown'] = 15
+                    _state['rollback_best_pre'] = trainer.best_score
 
                 # --- TensorBoard EoH events ---
                 writer.add_scalar('EoH/TriggerEpoch', epoch, len(controller.history))
