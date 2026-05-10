@@ -61,7 +61,7 @@ TRAIN_CONFIG = {
 ONLINE_CONFIG = {
     'plateau_min_epochs': 25,    # hard fallback: trigger if no improvement for this long
     'check_interval': 30,        # every N epochs, ask LLM whether to search
-    'log_dir': './logs/online_eoh',
+    'log_dir': '/public/home/zhoucl/lanl7_files/logs/online_eoh',
     'eval_timeout_seconds': 120,
     'design_review_interval': 3,  # run design review every N EoH searches
 }
