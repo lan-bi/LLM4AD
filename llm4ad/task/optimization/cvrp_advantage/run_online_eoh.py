@@ -242,7 +242,7 @@ def _run_eoh_and_switch(llm, evaluation, controller,
         ))
         return False, None
 
-    callable_fn = _compile_function(best_fn, template_program)
+    callable_fn = _compile_function(best_fn, evaluation.template_program)
     if callable_fn is None:
         return False, None
 
@@ -546,24 +546,17 @@ def _augment_task_description_full(base: str, error_lessons: str,
 # ---------------------------------------------------------------------------
 
 def _extract_fn_body(fn_source: str) -> str:
-    """Return the function body (code after docstring) from *fn_source*."""
-    lines = fn_source.splitlines()
-    result = []
-    in_docstring = False
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith('"""') or stripped.startswith("'''"):
-            if not in_docstring:
-                in_docstring = True
-            else:
-                in_docstring = False
-                continue  # skip closing triple-quote line
-        if in_docstring:
-            continue
-        if stripped == '' and not result:
-            continue  # skip blank lines before body
-        result.append(line)
-    return '\n'.join(result).strip()
+    """Return the function body (after def line + docstring) preserving indent."""
+    text = fn_source.strip()
+    # Strip the 'def ...:\n' line
+    def_match = re.search(r'^def \w+\s*\([^)]*\)\s*:\s*\n', text)
+    if not def_match:
+        return text
+    body = text[def_match.end():]
+    # Strip docstring if present (triple-quoted)
+    body = re.sub(r'^\s*"""[\s\S]*?"""\s*\n?', '', body)
+    body = re.sub(r"^\s*'''[\s\S]*?'''\s*\n?", '', body)
+    return body.strip('\n')  # strip trailing blank lines only, keep indent
 
 
 def _build_updated_template(fn_source: str,
@@ -740,7 +733,7 @@ def main():
         current_adv_source = full_state.get('advantage_fn_source')
         if current_adv_source is not None:
             compiled = _compile_from_source(
-                current_adv_source, template_program)
+                current_adv_source, evaluation.template_program)
             if compiled is not None:
                 trainer.switch_advantage(compiled)
 
@@ -758,6 +751,8 @@ def main():
             trainer.optimizer.load_state_dict(ckpt['optimizer_state_dict'])
             trainer.scheduler.load_state_dict(ckpt['scheduler_state_dict'])
             trainer.restore_eoh_state(ckpt)
+            if 'result_log' in ckpt:
+                trainer.result_log.set_raw_data(ckpt['result_log'])
 
         trainer.logger.info(
             '=== Resumed from checkpoint (epoch %d, %d controller records) ===',
@@ -770,7 +765,7 @@ def main():
                 task_description, instant, design_lessons)
         # Restore updated template (if advantage was saved)
         if current_adv_source:
-            evaluation._template_program = _build_updated_template(
+            evaluation.template_program = _build_updated_template(
                 current_adv_source, design_lessons)
     else:
         trainer.logger.info('=== Online EoH-integrated training started ===')
@@ -946,7 +941,7 @@ def main():
                 if switched and current_adv_source:
                     new_tmpl = _build_updated_template(
                         current_adv_source, old_design)
-                    evaluation._template_program = new_tmpl
+                    evaluation.template_program = new_tmpl
 
                 # Reset plateau so EoH doesn't retrigger every epoch
                 trainer.plateau_counter = 0
