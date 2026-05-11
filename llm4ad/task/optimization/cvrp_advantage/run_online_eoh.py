@@ -546,17 +546,25 @@ def _augment_task_description_full(base: str, error_lessons: str,
 # ---------------------------------------------------------------------------
 
 def _extract_fn_body(fn_source: str) -> str:
-    """Return the function body (after def line + docstring) preserving indent."""
+    """Return the function body (after def line + docstring), with uniform 4-space indent."""
     text = fn_source.strip()
-    # Strip the 'def ...:\n' line
     def_match = re.search(r'^def \w+\s*\([^)]*\)\s*:\s*\n', text)
     if not def_match:
         return text
     body = text[def_match.end():]
-    # Strip docstring if present (triple-quoted)
+    # Strip docstring
     body = re.sub(r'^\s*"""[\s\S]*?"""\s*\n?', '', body)
     body = re.sub(r"^\s*'''[\s\S]*?'''\s*\n?", '', body)
-    return body.strip('\n')  # strip trailing blank lines only, keep indent
+    # Re-indent: strip any existing indent, then add 4 spaces to every non-empty line
+    lines = body.strip('\n').splitlines()
+    indented = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped:
+            indented.append('    ' + stripped)
+        else:
+            indented.append('')
+    return '\n'.join(indented)
 
 
 def _build_updated_template(fn_source: str,
