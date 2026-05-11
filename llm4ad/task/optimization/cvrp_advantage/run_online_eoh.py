@@ -54,7 +54,7 @@ TRAIN_CONFIG = {
     'train_episodes': 2000,      # episodes per epoch
     'train_batch_size': 64,
     'use_cuda': True,
-    'cuda_device_num': 0,
+    'cuda_device_num': 2,
 }
 
 # Online EoH configuration
