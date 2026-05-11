@@ -555,13 +555,15 @@ def _extract_fn_body(fn_source: str) -> str:
     # Strip docstring
     body = re.sub(r'^\s*"""[\s\S]*?"""\s*\n?', '', body)
     body = re.sub(r"^\s*'''[\s\S]*?'''\s*\n?", '', body)
-    # Re-indent: strip any existing indent, then add 4 spaces to every non-empty line
+    # Normalize indentation: use textwrap.dedent to remove common leading
+    # whitespace, then re-indent uniformly by 4 spaces (preserving inner blocks).
+    import textwrap
+    body = textwrap.dedent(body)
     lines = body.strip('\n').splitlines()
     indented = []
     for line in lines:
-        stripped = line.strip()
-        if stripped:
-            indented.append('    ' + stripped)
+        if line.strip():
+            indented.append('    ' + line)
         else:
             indented.append('')
     return '\n'.join(indented)
