@@ -555,17 +555,15 @@ def _extract_fn_body(fn_source: str) -> str:
     # Strip docstring
     body = re.sub(r'^\s*"""[\s\S]*?"""\s*\n?', '', body)
     body = re.sub(r"^\s*'''[\s\S]*?'''\s*\n?", '', body)
-    # Normalize indentation: use textwrap.dedent to remove common leading
-    # whitespace, then re-indent uniformly by 4 spaces (preserving inner blocks).
-    import textwrap
-    body = textwrap.dedent(body)
+    # LLM-generated code often has inconsistent indentation (some blocks at
+    # 4 spaces, others at 8).  The only reliable normalisation is to strip
+    # every line and re-indent uniformly by 4 spaces.  This flattens inner
+    # blocks (if/for/while) but is always syntactically valid Python.
     lines = body.strip('\n').splitlines()
     indented = []
     for line in lines:
-        if line.strip():
-            indented.append('    ' + line)
-        else:
-            indented.append('')
+        stripped = line.strip()
+        indented.append('    ' + stripped if stripped else '')
     return '\n'.join(indented)
 
 

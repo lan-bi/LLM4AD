@@ -20,9 +20,11 @@ def _build_updated_template(fn_source, design_insights):
     body = text[def_match.end():]
     body = re.sub(r'^\s*"""[\s\S]*?"""\s*\n?', '', body)
     body = re.sub(r"^\s*'''[\s\S]*?'''\s*\n?", '', body)
-    body = textwrap.dedent(body)
     lines = body.strip('\n').splitlines()
-    indented = [('    ' + l if l.strip() else '') for l in lines]
+    indented = []
+    for l in lines:
+        s = l.strip()
+        indented.append('    ' + s if s else '')
     body = '\n'.join(indented)
     header = (
         "import torch\n\n"
