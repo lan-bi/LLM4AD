@@ -200,7 +200,7 @@ class CVRPAdvantageEvaluation(Evaluation):
         _use_cuda = torch.cuda.is_available()
         trainer_params = {
             'use_cuda': _use_cuda,
-            'cuda_device_num': 2 if _use_cuda else None,
+            'cuda_device_num': 0 if _use_cuda else None,
             'epochs': 0,
             'train_episodes': N_EVAL_BATCHES * EVAL_BATCH_SIZE,
             'train_batch_size': EVAL_BATCH_SIZE,
