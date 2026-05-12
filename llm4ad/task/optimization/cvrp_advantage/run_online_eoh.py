@@ -546,24 +546,48 @@ def _augment_task_description_full(base: str, error_lessons: str,
 # ---------------------------------------------------------------------------
 
 def _extract_fn_body(fn_source: str) -> str:
-    """Return the function body (after def line + docstring), with uniform 4-space indent."""
+    """Return the function body with correct Python indentation.
+
+    Uses ast.parse for well-formed functions; falls back to dedent+reindent
+    for LLM output with inconsistent indentation.
+    """
+    import ast
+    import textwrap
+
     text = fn_source.strip()
     def_match = re.search(r'^def \w+\s*\([^)]*\)\s*:\s*\n', text)
     if not def_match:
         return text
     body = text[def_match.end():]
-    # Strip docstring
+
+    # Try parsing the full function to get proper indentation
+    try:
+        tree = ast.parse(text)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef):
+                lines = text.splitlines()
+                body_start = node.body[0].lineno - 1
+                body_end = node.end_lineno
+                body = '\n'.join(lines[body_start:body_end])
+                # dedent removes common leading whitespace from all body lines
+                body = textwrap.dedent(body)
+                # add uniform 4-space base indent, preserving relative indentation
+                result = []
+                for l in body.splitlines():
+                    result.append('    ' + l if l.strip() else '')
+                return '\n'.join(result)
+    except (SyntaxError, IndentationError, ValueError):
+        pass
+
+    # Fallback for unparseable LLM output
     body = re.sub(r'^\s*"""[\s\S]*?"""\s*\n?', '', body)
     body = re.sub(r"^\s*'''[\s\S]*?'''\s*\n?", '', body)
-    # LLM-generated code often has inconsistent indentation (some blocks at
-    # 4 spaces, others at 8).  The only reliable normalisation is to strip
-    # every line and re-indent uniformly by 4 spaces.  This flattens inner
-    # blocks (if/for/while) but is always syntactically valid Python.
+    body = textwrap.dedent(body)
     lines = body.strip('\n').splitlines()
     indented = []
     for line in lines:
-        stripped = line.strip()
-        indented.append('    ' + stripped if stripped else '')
+        s = line.strip()
+        indented.append('    ' + s if s else '')
     return '\n'.join(indented)
 
 

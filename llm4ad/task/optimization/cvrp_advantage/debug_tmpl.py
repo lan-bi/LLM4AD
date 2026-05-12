@@ -8,14 +8,33 @@ def _build_updated_template(fn_source, design_insights=''):
     text = fn_source.strip()
     def_match = re.search(r'^def \w+\s*\([^)]*\)\s*:\s*\n', text)
     body = text[def_match.end():]
-    body = re.sub(r'^\s*"""[\s\S]*?"""\s*\n?', '', body)
-    body = re.sub(r"^\s*'''[\s\S]*?'''\s*\n?", '', body)
-    lines = body.strip('\n').splitlines()
-    indented = []
-    for l in lines:
-        s = l.strip()
-        indented.append('    ' + s if s else '')
-    body = '\n'.join(indented)
+
+    # Try ast.parse first
+    try:
+        tree = ast.parse(text)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef):
+                lines = text.splitlines()
+                body_start = node.body[0].lineno - 1
+                body_end = node.end_lineno
+                body = '\n'.join(lines[body_start:body_end])
+                body = textwrap.dedent(body)
+                result = []
+                for l in body.splitlines():
+                    result.append('    ' + l if l.strip() else '')
+                body = '\n'.join(result)
+                break
+    except (SyntaxError, IndentationError, ValueError):
+        body = text[def_match.end():]
+        body = re.sub(r'^\s*"""[\s\S]*?"""\s*\n?', '', body)
+        body = re.sub(r"^\s*'''[\s\S]*?'''\s*\n?", '', body)
+        body = textwrap.dedent(body)
+        lines = body.strip('\n').splitlines()
+        indented = []
+        for l in lines:
+            s = l.strip()
+            indented.append('    ' + s if s else '')
+        body = '\n'.join(indented)
     header = (
         'import torch\n\n'
         'def compute_advantage(reward,load,at_the_depot,finished,loss_ema,reward_ema,epoch):\n'

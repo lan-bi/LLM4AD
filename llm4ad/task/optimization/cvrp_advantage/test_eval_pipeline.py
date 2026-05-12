@@ -15,17 +15,33 @@ from llm4ad.base import TextFunctionProgramConverter
 STATE_DIR = '/public/home/qinjz/lanl7_files/logs/online_eoh'
 
 def _build_updated_template(fn_source, design_insights):
+    import ast
     text = fn_source.strip()
     def_match = re.search(r'^def \w+\s*\([^)]*\)\s*:\s*\n', text)
     body = text[def_match.end():]
-    body = re.sub(r'^\s*"""[\s\S]*?"""\s*\n?', '', body)
-    body = re.sub(r"^\s*'''[\s\S]*?'''\s*\n?", '', body)
-    lines = body.strip('\n').splitlines()
-    indented = []
-    for l in lines:
-        s = l.strip()
-        indented.append('    ' + s if s else '')
-    body = '\n'.join(indented)
+    # Try ast.parse to get correct indentation structure
+    try:
+        tree = ast.parse(text)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef):
+                lines = text.splitlines()
+                body = '\n'.join(lines[node.body[0].lineno-1:node.end_lineno])
+                body = textwrap.dedent(body)
+                result = []
+                for l in body.splitlines():
+                    result.append('    ' + l if l.strip() else '')
+                body = '\n'.join(result)
+                break
+    except (SyntaxError, IndentationError, ValueError):
+        body = re.sub(r'^\s*"""[\s\S]*?"""\s*\n?', '', body)
+        body = re.sub(r"^\s*'''[\s\S]*?'''\s*\n?", '', body)
+        body = textwrap.dedent(body)
+        lines = body.strip('\n').splitlines()
+        indented = []
+        for l in lines:
+            s = l.strip()
+            indented.append('    ' + s if s else '')
+        body = '\n'.join(indented)
     header = (
         "import torch\n\n"
         "def compute_advantage(reward, load, at_the_depot, finished, "
