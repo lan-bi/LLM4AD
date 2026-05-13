@@ -209,7 +209,7 @@ def _run_eoh_and_switch(llm, evaluation, controller,
 
     # Wrap LLM: mask key + inject latest eval errors into each prompt
     eoh = EoH(
-        llm=_KeyMaskedLLM(llm, error_log_path=error_log_path),
+        llm=_KeyMaskedLLM(ctrl_llm, error_log_path=error_log_path),
         evaluation=evaluation,
         profiler=profiler,
         max_sample_nums=decision.sample_count,
@@ -740,10 +740,14 @@ def main():
     create_logger(log_file={'desc': 'online_eoh', 'filename': 'run_log'})
 
     # --- build components ---
-    llm = HttpsApi(**LLM_CONFIG)
+    # Dedicated LLM clients for each agent — each with its own persistent
+    # requests.Session, reused across all EoH rounds (8100 epochs).
+    ctrl_llm = HttpsApi(**LLM_CONFIG)
+    reflect_llm = HttpsApi(**LLM_CONFIG)
+    review_llm = HttpsApi(**LLM_CONFIG)
     trainer = _build_trainer()
     controller = SearchController(
-        llm, log_dir=os.path.join(ONLINE_CONFIG['log_dir'], 'controller'))
+        ctrl_llm, log_dir=os.path.join(ONLINE_CONFIG['log_dir'], 'controller'))
     evaluation = CVRPAdvantageEvaluation(
         timeout_seconds=ONLINE_CONFIG['eval_timeout_seconds'])
 
@@ -982,9 +986,9 @@ def main():
 
                 # long-term: accumulated + summarized → should_search / DesignReview
                 old_long = _load_long_reflections(ONLINE_CONFIG['log_dir'])
-                new_long = _call_reflection_agent(llm, err_info, old_long)
+                new_long = _call_reflection_agent(reflect_llm, err_info, old_long)
                 if new_long != old_long:
-                    new_long = _summarize_reflections(llm, new_long)
+                    new_long = _summarize_reflections(reflect_llm, new_long)
                     _save_long_reflections(ONLINE_CONFIG['log_dir'], new_long)
 
                 # --- design review: periodic analysis of best/worst ---
@@ -995,9 +999,9 @@ def main():
                     best_fns, worst_fns = _collect_best_worst_functions(
                         ONLINE_CONFIG['log_dir'])
                     new_design = _call_design_review_agent(
-                        llm, best_fns, worst_fns, old_design)
+                        review_llm, best_fns, worst_fns, old_design)
                     if new_design != old_design:
-                        new_design = _summarize_reflections(llm, new_design)
+                        new_design = _summarize_reflections(review_llm, new_design)
                         _save_design_lessons(ONLINE_CONFIG['log_dir'], new_design)
                         old_design = new_design
 
