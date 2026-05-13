@@ -209,7 +209,7 @@ def _run_eoh_and_switch(llm, evaluation, controller,
 
     # Wrap LLM: mask key + inject latest eval errors into each prompt
     eoh = EoH(
-        llm=_KeyMaskedLLM(ctrl_llm, error_log_path=error_log_path),
+        llm=_KeyMaskedLLM(HttpsApi(**LLM_CONFIG), error_log_path=error_log_path),
         evaluation=evaluation,
         profiler=profiler,
         max_sample_nums=decision.sample_count,
