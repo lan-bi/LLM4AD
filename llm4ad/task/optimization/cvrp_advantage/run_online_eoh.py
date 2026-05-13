@@ -50,8 +50,8 @@ LLM_CONFIG = {
 TRAIN_CONFIG = {
     'problem_size': 100,         # CVRP100
     'pomo_size': 100,            # = problem_size for POMO
-    'epochs': 3000,              # total training epochs
-    'train_episodes': 2000,      # episodes per epoch
+    'epochs': 8100,              # total training epochs
+    'train_episodes': 10000,     # episodes per epoch (matching train_n100.py)
     'train_batch_size': 64,
     'use_cuda': True,
     'cuda_device_num': 0,
