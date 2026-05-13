@@ -19,11 +19,12 @@
 
 from __future__ import annotations
 
-import http.client
 import json
 import time
 from typing import Any
 import traceback
+
+import requests
 from ...base import LLM
 
 
@@ -43,6 +44,12 @@ class HttpsApi(LLM):
         self._timeout = timeout
         self._kwargs = kwargs
         self._cumulative_error = 0
+        self._session = requests.Session()
+        self._session.headers.update({
+            'Authorization': f'Bearer {self._key}',
+            'User-Agent': 'Apifox/1.0.0 (https://apifox.com)',
+            'Content-Type': 'application/json',
+        })
 
     def draw_sample(self, prompt: str | Any, *args, **kwargs) -> str:
         """
@@ -99,27 +106,18 @@ class HttpsApi(LLM):
                 messages = [{'role': 'user', 'content': text_content}]
 
         # Retry loop for handling network or API transient errors
+        url = f'https://{self._host}/v1/chat/completions'
         while True:
             try:
-                conn = http.client.HTTPSConnection(self._host, timeout=self._timeout)
-
-                # Prepare standard OpenAI-compatible payload
-                payload = json.dumps({
+                payload = {
                     'max_tokens': self._kwargs.get('max_tokens', 8192),
                     'top_p': self._kwargs.get('top_p', None),
                     'temperature': self._kwargs.get('temperature', 1.0),
                     'model': self._model,
                     'messages': messages
-                })
-                headers = {
-                    'Authorization': f'Bearer {self._key}',
-                    'User-Agent': 'Apifox/1.0.0 (https://apifox.com)',
-                    'Content-Type': 'application/json'
                 }
-                conn.request('POST', '/v1/chat/completions', payload, headers)
-                res = conn.getresponse()
-                data = res.read().decode('utf-8')
-                data = json.loads(data)
+                resp = self._session.post(url, json=payload, timeout=self._timeout)
+                data = resp.json()
 
                 # Extract content from the standard response format
                 response = data['choices'][0]['message']['content']

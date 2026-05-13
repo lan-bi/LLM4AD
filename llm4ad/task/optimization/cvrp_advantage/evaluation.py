@@ -24,7 +24,7 @@ __all__ = ['CVRPAdvantageEvaluation']
 # ---------------------------------------------------------------------------
 # Online evaluation parameters
 # ---------------------------------------------------------------------------
-N_EVAL_BATCHES = 10        # number of training batches for quick comparison
+N_EVAL_BATCHES = 20        # number of training batches for comparison
 EVAL_BATCH_SIZE = 64       # batch size for evaluation
 EVAL_SEED = 42             # fixed seed so candidate vs default see same data
 # ---------------------------------------------------------------------------
