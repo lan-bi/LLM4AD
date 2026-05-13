@@ -199,7 +199,7 @@ def _build_trainer():
     )
 
 
-def _run_eoh_and_switch(llm, evaluation, controller,
+def _run_eoh_and_switch(evaluation, controller,
                         trainer, epoch: int, decision: SearchDecision,
                         error_log_path: str | None = None):
     """Run one EoH round, compile the best function, and switch if effective."""
@@ -952,7 +952,7 @@ def main():
 
                 # Run EoH and switch if effective
                 switched, fn_source = _run_eoh_and_switch(
-                    llm, evaluation, controller, trainer, epoch, decision,
+                    evaluation, controller, trainer, epoch, decision,
                     error_log_path=error_log_path)
 
                 if switched:
